@@ -36,6 +36,11 @@ RNG = np.random.default_rng(20200115)
 # ---------------------------------------------------------------------------
 # Escrita COMTRADE
 # ---------------------------------------------------------------------------
+def _write_crlf(path: Path, lines: list[str]) -> None:
+    """Grava texto com CRLF de forma idêntica em qualquer sistema (bytes, sem
+    a conversão de fim de linha do modo texto do Windows)."""
+    path.write_bytes(("\r\n".join(lines) + "\r\n").encode("ascii"))
+
 @dataclass
 class Analog:
     name: str
@@ -92,7 +97,7 @@ class Record:
         lines += [f"{F0:.1f}", "1", f"{self.fs:.6f},{n}", f"{DATE},{start}", f"{DATE},{trig}", fmt, "1.000000"]
         if rev == "2013":
             lines += ["-3,-3", "0,0"]
-        (folder / "registro.cfg").write_text("\r\n".join(lines) + "\r\n", encoding="ascii")
+        _write_crlf(folder / "registro.cfg", lines)
 
         ts = np.round(self.t * 1e6).astype(np.int64)
         dig = np.column_stack([d.values.astype(np.uint8) for d in self.digitals]) if nd else np.zeros((n, 0), np.uint8)
@@ -124,7 +129,7 @@ class Record:
             "",
             text,
         ]
-        (folder / "registro.hdr").write_text("\r\n".join(body) + "\r\n", encoding="ascii")
+        _write_crlf(folder / "registro.hdr", body)
 
 
 # ---------------------------------------------------------------------------
@@ -528,8 +533,8 @@ def main() -> None:
     rec.write(out / "demo_falta_transformador", "BINARY", "2013")
     rec.write_hdr(out / "demo_falta_transformador", "Falta interna fase A-terra nos terminais AT do transformador 500/34,5 kV",
                   "Transformador 150 MVA YNd1. Protecao diferencial 87T atua em ~20 ms; disjuntores AT (disjuntor-e-meio) e BT abrem em ~62 ms.")
-    (out / "demo_falta_transformador" / "registro.inf").write_text(
-        "[Oscilo sample]\r\nsynthetic=1\r\ngenerator=scripts/generate_samples.py\r\nscenario=falta interna AT\r\n", encoding="ascii")
+    _write_crlf(out / "demo_falta_transformador" / "registro.inf",
+                ["[Oscilo sample]", "synthetic=1", "generator=scripts/generate_samples.py", "scenario=falta interna AT"])
 
     t, an, dg, tf = transformer_relay_event(2000.0, 12054, "externa", "exp25")
     Record("IED_DEMO_002", 2000.0, t, tf, an, dg).write(out / "demo_87t_exportacao", "ASCII", "2013")

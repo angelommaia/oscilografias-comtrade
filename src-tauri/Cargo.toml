@@ -1,6 +1,6 @@
 [package]
 name = "oscilo"
-version = "0.6.1"
+version = "0.6.2"
 description = "Oscilo – análise de oscilografias COMTRADE"
 edition = "2021"
 rust-version = "1.77"

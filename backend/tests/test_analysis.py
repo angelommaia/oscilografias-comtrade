@@ -117,7 +117,8 @@ def test_binary_reader_roundtrip(tmp_path):
     for j in range(ns):
         lines.append(f"{j + 1},D{j},,,0")
     lines += ["60", "1", f"{fs},{n}", "01/01/2026,00:00:00.000000", "01/01/2026,00:00:00.000000", "BINARY", "1"]
-    (tmp_path / "r.cfg").write_text("\r\n".join(lines) + "\r\n")
+    # bytes: write_text no Windows converteria "\n" em "\r\n" de novo ("\r\r\n")
+    (tmp_path / "r.cfg").write_bytes(("\r\n".join(lines) + "\r\n").encode("ascii"))
     dt = np.dtype([("n", "<u4"), ("ts", "<u4"), ("a", "<i2", (na,)), ("d", "<u2", (2,))])
     arr = np.zeros(n, dt)
     arr["n"] = np.arange(1, n + 1)

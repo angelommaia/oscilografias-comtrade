@@ -30,8 +30,8 @@ Na página **Releases** do repositório:
 1. Atualize a versão em `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` e `package.json`.
 2. Crie e envie uma tag:
    ```powershell
-   git tag v0.6.1
-   git push origin v0.6.1
+   git tag v0.6.2
+   git push origin v0.6.2
    ```
 3. O workflow **Release** (`.github/workflows/release.yml`) roda os testes e empacota o servidor. Depois gera o instalador e o portátil do Windows, os pacotes de Linux e macOS e o pacote web, e anexa tudo a um **Release em rascunho**. Revise e publique.
 
