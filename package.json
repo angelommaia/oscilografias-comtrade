@@ -1,0 +1,14 @@
+{
+  "name": "oscilo",
+  "private": true,
+  "version": "0.6.1",
+  "description": "Oscilo – análise de oscilografias COMTRADE (versão desktop)",
+  "scripts": {
+    "server:build": "pyinstaller desktop/oscilo-server.spec --noconfirm --distpath build --workpath build/pyinstaller",
+    "desktop": "tauri dev",
+    "desktop:build": "tauri build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

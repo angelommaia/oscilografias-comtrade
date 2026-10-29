@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.local
+*.egg-info/
+.pytest_cache/
+
+# Oscilografias de exemplo (geralmente arquivos grandes)
+samples/**/*.dat
+samples/**/*.DAT
+!samples/**/registro.dat
+!samples/**/registro.DAT
+
+# Versão desktop (Tauri + PyInstaller)
+node_modules/
+build/
+release/
+src-tauri/target/
+src-tauri/gen/
+dist/
+
+# Pastas e documentos locais que não fazem parte do código publicado
+Claude outputs/
+/Embasamento*
+/Guia de estudos*
+
+# Configuração local do anonimizador (contém nomes reais)
+backend/anonymize.local.json

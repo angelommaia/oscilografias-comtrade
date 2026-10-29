@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Oscilo</title>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: "Segoe UI", system-ui, sans-serif; background: #e8e8e8; color: #2a2a2a; }
+    .box { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; }
+    h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.02em; }
+    p { margin: 0; color: #666; font-size: 13px; }
+    .spin { width: 22px; height: 22px; border: 3px solid #c8daf0; border-top-color: #4a7ab8; border-radius: 50%; animation: s 0.8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+    .err { display: none; max-width: 560px; text-align: center; color: #8a3415; font-size: 13px; line-height: 1.5; }
+    .err code { display: block; margin-top: 6px; color: #666; font-size: 12px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Oscilo</h1>
+    <div class="spin" id="spin"></div>
+    <p id="msg">Iniciando o motor de análise…</p>
+    <div class="err" id="err"></div>
+  </div>
+  <script>
+    window.showError = function (message, logPath) {
+      document.getElementById("spin").style.display = "none";
+      document.getElementById("msg").textContent = "Não foi possível iniciar o Oscilo.";
+      const err = document.getElementById("err");
+      err.textContent = message;
+      if (logPath) {
+        const c = document.createElement("code");
+        c.textContent = "Log: " + logPath;
+        err.appendChild(c);
+      }
+      err.style.display = "block";
+    };
+  </script>
+</body>
+</html>

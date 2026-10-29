@@ -1,0 +1,4 @@
+[Oscilo sample]
+synthetic=1
+generator=scripts/generate_samples.py
+scenario=falta interna AT

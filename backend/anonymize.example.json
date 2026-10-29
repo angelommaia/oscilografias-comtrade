@@ -1,0 +1,9 @@
+{
+  "_comentario": "Copie para anonymize.local.json (ignorado pelo Git) e preencha com os dados reais.",
+  "input": "C:\\caminho\\para\\oscilografias\\originais",
+  "tokens": ["NOME DA SUBESTACAO", "NOME_DO_RELE", "NUMERO_DO_DISJUNTOR"],
+  "datasets": [
+    {"cfg": "pasta_evento_1/arquivo_original.cfg", "out": "demo_87t_diferencial", "device": "IED_DEMO_001"},
+    {"cfg": "pasta_evento_2/arquivo_original.cfg", "out": "demo_falta_transformador", "device": "IED_DEMO_003"}
+  ]
+}

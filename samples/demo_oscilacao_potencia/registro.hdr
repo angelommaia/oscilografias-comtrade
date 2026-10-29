@@ -1,0 +1,8 @@
+Station Name: SUBESTACAO_DEMO
+Device: IED_DEMO_004
+Record type: SINTETICO (gerado por scripts/generate_samples.py)
+Start time: 15/01/2020 10:00:00.000000
+Trigger time: 15/01/2020 10:00:01.000000
+Event: Oscilacao de potencia estavel seguida de perda de sincronismo
+
+Linha 500 kV, modelo de duas maquinas. Oscilacao amortecida (0,7 Hz) a partir de 1,0 s; nova perturbacao em 5,0 s leva ao escorregamento crescente e trip por OOS.

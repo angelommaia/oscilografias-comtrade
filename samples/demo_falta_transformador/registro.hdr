@@ -1,0 +1,8 @@
+Station Name: SUBESTACAO_DEMO
+Device: IED_DEMO_003
+Record type: SINTETICO (gerado por scripts/generate_samples.py)
+Start time: 15/01/2020 10:00:00.000000
+Trigger time: 15/01/2020 10:00:03.004167
+Event: Falta interna fase A-terra nos terminais AT do transformador 500/34,5 kV
+
+Transformador 150 MVA YNd1. Protecao diferencial 87T atua em ~20 ms; disjuntores AT (disjuntor-e-meio) e BT abrem em ~62 ms.

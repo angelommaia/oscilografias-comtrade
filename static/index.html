@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oscilografias COMTRADE</title>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <nav class="mode-tabs" role="tablist">
+        <button type="button" class="mode-tab active" data-mode="osc" role="tab">Oscilografia</button>
+        <button type="button" class="mode-tab" data-mode="prot" role="tab">Proteção</button>
+      </nav>
+      <div class="toolbar-group">
+        <label class="btn file-btn">
+          Abrir COMTRADE
+          <input type="file" id="file-input" accept=".cfg,.CFG" multiple hidden />
+        </label>
+        <button type="button" id="open-native" class="btn hidden" title="Abrir um arquivo .cfg do computador (o .dat é lido da mesma pasta)">Abrir…</button>
+        <select id="recent-select" class="select select-recent hidden" title="Abertos recentemente">
+          <option value="">Recentes…</option>
+        </select>
+        <select id="sample-select" class="select" title="Oscilografias de exemplo">
+          <option value="">Exemplos…</option>
+        </select>
+      </div>
+      <div class="toolbar-group osc-only">
+        <button id="zoom-in" class="btn" title="Zoom in">+</button>
+        <button id="zoom-out" class="btn" title="Zoom out">−</button>
+        <button id="zoom-fit" class="btn" title="Ajustar à janela">Ajustar</button>
+        <button id="zoom-selection" class="btn" title="Zoom na seleção">Zoom seleção</button>
+      </div>
+      <div class="toolbar-group osc-only">
+        <label class="toggle">
+          <input type="radio" name="layout" value="stacked" checked />
+          Faixas separadas
+        </label>
+        <label class="toggle">
+          <input type="radio" name="layout" value="overlay" />
+          Faixa única
+        </label>
+      </div>
+      <div class="toolbar-group osc-only">
+        <button id="toggle-dock" class="btn btn-toggle active" title="Mostrar/ocultar painel de análises">Análises</button>
+      </div>
+      <div class="toolbar-group markers-group osc-only">
+        <button id="add-marker" class="btn" title="Adicionar marcador no cursor">+ Marcador</button>
+        <button id="clear-markers" class="btn" title="Limpar marcadores">Limpar</button>
+      </div>
+    </header>
+
+    <div class="main">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h2>Canais</h2>
+          <div class="sidebar-actions">
+            <button id="select-all-analog" class="link-btn">Analógicos</button>
+            <button id="clear-selection" class="link-btn">Limpar</button>
+          </div>
+        </div>
+        <div id="record-info" class="record-info"></div>
+        <div class="channel-section">
+          <h3>Analógicos</h3>
+          <input type="search" id="analog-search" class="channel-search" placeholder="Buscar canal analógico…" />
+          <div id="analog-channels" class="channel-list"></div>
+        </div>
+        <div class="channel-section">
+          <h3>Digitais</h3>
+          <input type="search" id="digital-search" class="channel-search" placeholder="Buscar canal digital…" />
+          <div id="digital-channels" class="channel-list"></div>
+        </div>
+        <div class="channel-section phasor-section hidden" id="phasor-section">
+          <h3>Fasores</h3>
+          <div class="phasor-controls">
+            <p id="no-groups-hint" class="phasor-hint hidden">Nenhum conjunto trifásico reconhecido pelos nomes dos canais. Defina um grupo manualmente.</p>
+            <label class="phasor-field">
+              Tensão
+              <select id="voltage-group" class="select phasor-select"></select>
+            </label>
+            <label class="phasor-field">
+              Corrente
+              <select id="current-group" class="select phasor-select"></select>
+            </label>
+            <label class="phasor-field">
+              Janela
+              <select id="window-cycles" class="select phasor-select">
+                <option value="0.5">½ ciclo</option>
+                <option value="1">1 ciclo</option>
+                <option value="2">2 ciclos</option>
+                <option value="4">4 ciclos</option>
+              </select>
+            </label>
+            <label class="phasor-field">
+              Estimador
+              <select id="estimator" class="select phasor-select"></select>
+            </label>
+            <div class="group-actions">
+              <button type="button" id="add-group" class="btn btn-sm">+ Grupo trifásico</button>
+              <button type="button" id="remove-group" class="link-btn hidden" title="Remove os grupos manuais selecionados">Remover manual</button>
+            </div>
+          </div>
+          <div id="derived-metrics-list" class="derived-metrics-list"></div>
+        </div>
+      </aside>
+
+      <section class="viewer">
+        <div class="ruler-container">
+          <div class="track-gutter"></div>
+          <div class="ruler-wrap">
+            <canvas id="ruler-canvas"></canvas>
+            <div id="selection-overlay" class="selection-overlay hidden"></div>
+          </div>
+        </div>
+        <div id="tracks-container" class="tracks-container">
+          <div class="empty-state" id="empty-state">
+            <p>Abra um arquivo COMTRADE (.cfg + .dat) ou selecione um exemplo disponível.</p>
+          </div>
+        </div>
+        <div id="nav-scroll-bar" class="nav-scroll-bar hidden">
+          <div class="track-gutter"></div>
+          <div class="nav-scroll-wrap">
+            <input type="range" id="nav-scroll" min="0" max="1000" value="0" step="1" title="Navegar no tempo" />
+          </div>
+        </div>
+      </section>
+
+      <aside id="analysis-dock" class="analysis-dock">
+        <div class="dock-resizer" title="Arraste para redimensionar"></div>
+        <div class="dock-inner">
+          <nav class="dock-tabs"></nav>
+          <div class="dock-body"></div>
+        </div>
+      </aside>
+    </div>
+
+    <div id="protection-view" class="protection-view hidden"></div>
+
+    <dialog id="group-dialog" class="group-dialog">
+      <form method="dialog">
+        <h3>Novo grupo trifásico</h3>
+        <label>Grandeza
+          <select name="quantity" class="select">
+            <option value="V">Tensão (Va, Vb, Vc)</option>
+            <option value="I">Corrente (Ia, Ib, Ic)</option>
+          </select>
+        </label>
+        <label>Nome <input name="label" class="an-input" maxlength="60" placeholder="ex.: LT 500 kV – Terminal X" /></label>
+        <label>Fase A <select name="a" class="select"></select></label>
+        <label>Fase B <select name="b" class="select"></select></label>
+        <label>Fase C <select name="c" class="select"></select></label>
+        <p class="dlg-error"></p>
+        <div class="dlg-actions">
+          <button value="cancel" class="btn" formnovalidate>Cancelar</button>
+          <button value="ok" class="btn btn-primary">Criar grupo</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="phasor-panel" class="phasor-panel hidden">
+      <div class="phasor-panel-header">Grandezas fasoriais no cursor</div>
+      <div id="phasor-table-wrap" class="phasor-table-wrap"></div>
+    </div>
+
+    <footer class="statusbar">
+      <span id="status-position">Posição: —</span>
+      <span id="status-selection">Seleção: —</span>
+      <span id="status-zoom">Zoom: 100%</span>
+      <span id="status-markers">Marcadores: 0</span>
+    </footer>
+  </div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

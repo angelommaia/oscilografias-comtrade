@@ -1,0 +1,24 @@
+OSCILO – VERSÃO WEB
+===================
+
+Análise de oscilografias COMTRADE no navegador. O servidor roda neste
+computador; os arquivos abertos não são enviados para a internet.
+
+Requisito: Python 3.10 ou mais novo (https://www.python.org/downloads/).
+
+Windows .......... execute iniciar.bat
+Linux / macOS .... execute ./iniciar.sh
+
+Na primeira execução as dependências são instaladas na pasta .venv
+(precisa de internet, uma única vez). Depois o navegador abre em
+http://127.0.0.1:8000. Para encerrar, feche a janela do terminal.
+
+Opções (iniciar.bat ou iniciar.sh):
+  --port 8080       outra porta
+  --no-browser      não abrir o navegador
+  --host 0.0.0.0    acesso por outros computadores da rede
+                    (sem senha: use apenas em rede confiável)
+
+Prefere um programa instalável ou portátil, sem Python?
+Baixe o instalador ou a versão portátil na página de Releases:
+https://github.com/angelommaia/oscilografias-comtrade/releases
