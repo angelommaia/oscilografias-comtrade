@@ -4,4 +4,4 @@ Para adicionar uma análise nova: crie um módulo aqui, decore a classe com
 @register e inclua o import abaixo.
 """
 
-from . import harmonics, impedance, phasor_diagram  # noqa: F401
+from . import cursors, events, harmonics, impedance, phasor_diagram, summary  # noqa: F401

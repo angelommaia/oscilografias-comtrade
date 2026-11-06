@@ -19,7 +19,7 @@ from comtrade_reader import read_record
 from analysis import AnalysisContext, AnalysisRequest, RecordData, get_analysis
 from analysis.dsp import list_estimators
 from analysis.context import plot_step
-from analysis.groups import detect_three_phase_groups, make_group
+from analysis.groups import apply_rotation_checks, check_rotation, detect_three_phase_groups, make_group
 from phasor_analysis import METRIC_CATALOG, METRIC_GROUPS, compute_metrics, decimate_series
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,8 @@ class RecordMeta:
     frequency_hz: float = 60.0
     analog_channels: list[ChannelInfo] = field(default_factory=list)
     digital_channels: list[ChannelInfo] = field(default_factory=list)
+    source_name: str = ""  # nome do arquivo .cfg (ou descrição do registro combinado)
+    merge: dict[str, Any] | None = None  # especificação, quando é um registro combinado
 
 
 class ComtradeStore:
@@ -73,7 +75,7 @@ class ComtradeStore:
         self._max_records = max(1, max_records)
 
     # ------------------------------------------------------------ carga
-    def load_from_path(self, cfg_path: Path) -> RecordMeta:
+    def load_from_path(self, cfg_path: Path, source_name: str | None = None) -> RecordMeta:
         cfg_path = cfg_path.resolve()
         if not cfg_path.exists():
             raise FileNotFoundError(f"Arquivo CFG não encontrado: {cfg_path}")
@@ -96,6 +98,7 @@ class ComtradeStore:
         logger.info("COMTRADE carregado: %s (%d amostras)", cfg_path.name, rec.total_samples)
 
         meta = self._build_meta(record_id, rec)
+        meta.source_name = source_name or cfg_path.name
         analog = [self._to_primary(analog_raw[i], info) for i, info in enumerate(meta.analog_channels)]
         data = RecordData(
             meta=meta,
@@ -104,12 +107,28 @@ class ComtradeStore:
             digital=status,
             auto_groups=detect_three_phase_groups(meta.analog_channels),
         )
+        apply_rotation_checks(
+            data.auto_groups,
+            lambda idx, i0, i1: analog[idx][i0:i1],
+            len(data.time), float(meta.sample_rate_hz or 0) or 1.0, float(meta.frequency_hz or 60.0),
+        )
+        self._register(data)
+        return meta
+
+    def _register(self, data: RecordData) -> None:
+        record_id = data.meta.id
         with self._lock:
             self._data[record_id] = data
             while len(self._data) > self._max_records:
                 evicted, _ = self._data.popitem(last=False)
                 logger.info("Registro removido da memória (LRU): %s", evicted)
-        return meta
+
+    def list_records(self) -> list[RecordMeta]:
+        with self._lock:
+            return [d.meta for d in reversed(self._data.values())]
+
+    def get_data(self, record_id: str) -> RecordData:
+        return self._get(record_id)
 
     def _get(self, record_id: str) -> RecordData:
         with self._lock:
@@ -122,10 +141,10 @@ class ComtradeStore:
     def context(self, record_id: str) -> AnalysisContext:
         return AnalysisContext(self._get(record_id))
 
-    def load_from_upload(self, cfg_file: Path, dat_file: Path) -> RecordMeta:
+    def load_from_upload(self, cfg_file: Path, dat_file: Path, source_name: str | None = None) -> RecordMeta:
         """Carrega arquivos já gravados em disco (o upload é transmitido em
         blocos para um diretório temporário, sem passar inteiro pela RAM)."""
-        return self.load_from_path(cfg_file)
+        return self.load_from_path(cfg_file, source_name)
 
     @staticmethod
     def _find_dat_file(cfg_path: Path) -> Path | None:
@@ -197,6 +216,10 @@ class ComtradeStore:
 
             times, values = self._decimate_minmax(time_full, raw, max_points)
             y_min, y_max = self._channel_y_limits(info, raw)
+            values = np.asarray(values, dtype=float)
+            vals = values.tolist()
+            if not np.isfinite(values).all():  # lacunas (ex.: registro combinado) → null no JSON
+                vals = [v if np.isfinite(v) else None for v in values]
             cfg_min = self._to_primary_scalar(info.cfg_min, info) if info.cfg_min is not None else None
             cfg_max = self._to_primary_scalar(info.cfg_max, info) if info.cfg_max is not None else None
 
@@ -207,8 +230,9 @@ class ComtradeStore:
                     "unit": info.unit,
                     "kind": info.kind,
                     "times": times.tolist(),
-                    "values": values.tolist(),
+                    "values": vals,
                     "min": y_min,
+                    **self._record_range(data, info, pos),
                     "max": y_max,
                     "cfg_min": cfg_min,
                     "cfg_max": cfg_max,
@@ -240,6 +264,7 @@ class ComtradeStore:
                 continue
             if info.kind == "analog":
                 value = float(data.analog[pos][sample_idx])
+                value = value if np.isfinite(value) else None
             else:
                 value = float(data.digital[pos][sample_idx])
             channels.append(
@@ -272,6 +297,9 @@ class ComtradeStore:
             raise ValueError("Selecione três canais analógicos distintos.")
         label = (label or "").strip()[:60] or f"Grupo {len(data.manual_groups) + 1}"
         group = make_group(quantity, label, a, b, c, source="manual")
+        rot = check_rotation(group, lambda idx, i0, i1: data.analog[idx][i0:i1], len(data.time),
+                             float(data.meta.sample_rate_hz or 1.0), float(data.meta.frequency_hz or 60.0))
+        group["rotation"], group["seq_ratio"] = rot["rotation"], rot["ratio"]
         with self._lock:
             data.manual_groups = [g for g in data.manual_groups if g["id"] != group["id"]] + [group]
         return group
@@ -374,7 +402,7 @@ class ComtradeStore:
         analysis.validate(req)
         ctx = self.context(record_id)
         result = analysis.run(ctx, req)
-        return {"analysis": analysis_id, **result}
+        return _json_safe({"analysis": analysis_id, **result})
 
     @staticmethod
     def _locate(meta: RecordMeta, index: int) -> tuple[ChannelInfo | None, int]:
@@ -474,9 +502,23 @@ class ComtradeStore:
         return None
 
     @staticmethod
+    def _record_range(data: RecordData, info: ChannelInfo, pos: int) -> dict[str, float | None]:
+        """Mín/máx do canal no registro inteiro (escala vertical estável)."""
+        if info.kind != "analog":
+            return {}
+        if pos not in data.ranges:
+            x = np.asarray(data.analog[pos][:], dtype=np.float64)
+            x = x[np.isfinite(x)]
+            data.ranges[pos] = (float(x.min()), float(x.max())) if len(x) else (0.0, 0.0)
+        lo, hi = data.ranges[pos]
+        return {"data_min": lo, "data_max": hi}
+
+    @staticmethod
     def _channel_y_limits(info: ChannelInfo, raw: np.ndarray) -> tuple[float, float]:
-        data_min = float(np.min(raw)) if len(raw) else 0.0
-        data_max = float(np.max(raw)) if len(raw) else 0.0
+        finite = np.asarray(raw, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        data_min = float(np.min(finite)) if len(finite) else 0.0
+        data_max = float(np.max(finite)) if len(finite) else 0.0
 
         if info.kind == "analog" and info.cfg_min is not None and info.cfg_max is not None:
             lo = min(info.cfg_min, info.cfg_max, data_min)
@@ -523,6 +565,19 @@ class ComtradeStore:
         if not name or name in (".", ".."):
             return default
         return name
+
+
+def _json_safe(obj):
+    """NaN/inf → None (JSON válido), recursivamente."""
+    if isinstance(obj, float):
+        return obj if np.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, np.generic):
+        return _json_safe(obj.item())
+    return obj
 
 
 store = ComtradeStore()

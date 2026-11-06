@@ -5,10 +5,16 @@
  *   3. importe e registre aqui.
  */
 import { registerView } from "./dock.js";
+import summary from "./views/summary.js";
+import events from "./views/events.js";
+import cursors from "./views/cursors.js";
 import phasorDiagram from "./views/phasor-diagram.js";
 import impedance from "./views/impedance.js";
 import harmonics from "./views/harmonics.js";
 
+registerView(summary);
+registerView(events);
+registerView(cursors);
 registerView(phasorDiagram);
 registerView(impedance);
 registerView(harmonics);

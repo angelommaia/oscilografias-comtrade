@@ -166,11 +166,13 @@ pub fn run() {
                     return;
                 }
                 let origin = format!("http://127.0.0.1:{port}");
-                // A interface servida pelo backend só pode usar o diálogo "Abrir".
+                // A interface servida pelo backend só pode usar os diálogos "Abrir" e "Salvar"
+                // (o arquivo do relatório é gravado pelo backend no caminho escolhido).
                 let cap = CapabilityBuilder::new("local-server")
                     .remote(format!("{origin}/*"))
                     .window("main")
-                    .permission("dialog:allow-open");
+                    .permission("dialog:allow-open")
+                    .permission("dialog:allow-save");
                 if let Err(e) = handle.add_capability(cap) {
                     eprintln!("capability: {e}");
                 }

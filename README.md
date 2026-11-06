@@ -25,7 +25,16 @@ O instalador e a versão portátil não precisam de Python nem de internet, e os
 
 - **COMTRADE** (IEEE C37.111, revisões 1991/1999/2013), nos formatos ASCII, BINARY, BINARY32 e FLOAT32, de qualquer fabricante. Registros de **1 GB** abrem em segundos.
 - **Visualização** com faixas por canal ou sobrepostas, zoom, régua com cursor sincronizado, marcadores e canais digitais.
-- **Grupos trifásicos** reconhecidos automaticamente pelos nomes dos canais ou montados manualmente.
+- **Cursores C1/C2** arrastáveis, com Δt e valores instantâneos, RMS e fasoriais em cada um, além de pico e RMS do trecho entre eles.
+- **Sequência de eventos** dos canais digitais (trip, partida, disjuntor, bloqueio, religamento), com tempo relativo ao trigger.
+- **Resumo automático da perturbação:**
+  - início, duração e tipo da falta, com as fases envolvidas e a indicação de terra;
+  - correntes máximas e afundamentos de tensão;
+  - tempos de partida, trip e abertura do disjuntor, interrupção por polo e religamento;
+  - identificação de energização por inrush.
+- **Relatório** em Word (.docx), HTML ou PDF, com resumo, eventos, medições, figuras e os comentários do analista.
+- **Grupos trifásicos** reconhecidos automaticamente, inclusive por cores (azul/branca/vermelha, como `Vaz`, `Ibr` e `VR`), pelo campo de fase do arquivo ou pela ordem dos canais quando o nome não traz a fase. Uma verificação de rotação aponta fases trocadas (sequência ACB); também é possível montar os grupos manualmente.
+- **Juntar registros** de terminais ou IEDs diferentes numa base de tempo comum. O alinhamento pode ser feito pelo início da perturbação (registros sem sincronismo), pelo trigger ou pelo horário GPS, com ajuste fino manual; o programa também mostra o erro de relógio de cada arquivo. Todas as análises funcionam sobre o registro combinado.
 - **Fasores** estimados por mínimos quadrados, exatos mesmo com número fracionário de amostras por ciclo. Também disponíveis: DFT e variantes com rejeição de DC.
 - **Painel de análises:**
   - diagrama fasorial com componentes simétricas;

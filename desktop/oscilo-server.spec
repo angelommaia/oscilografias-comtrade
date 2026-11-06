@@ -26,7 +26,8 @@ hidden = (
     UVICORN
     + collect_submodules("analysis")
     + collect_submodules("protection")
-    + ["comtrade", "comtrade_reader", "comtrade_service", "phasor_analysis", "sample_catalog", "config", "main"]
+    + collect_submodules("report")
+    + ["comtrade", "comtrade_reader", "comtrade_service", "merge", "phasor_analysis", "sample_catalog", "config", "main"]
 )
 
 a = Analysis(

@@ -83,7 +83,7 @@ export class AnalysisDock {
     }
 
     const bus = this.ctx.bus;
-    for (const evt of ["record", "cursor", "selection", "view", "groups", "channels"]) {
+    for (const evt of ["record", "cursor", "cursors", "selection", "view", "groups", "channels"]) {
       bus.on(evt, (payload) => this.panels.forEach((p) => p.onEvent(evt, payload)));
     }
 

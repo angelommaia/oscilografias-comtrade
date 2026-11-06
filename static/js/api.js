@@ -132,3 +132,26 @@ export function decimateIndices(length, maxPoints) {
   }
   return indices;
 }
+
+/** POST JSON que devolve o corpo bruto (Blob) – usado para baixar arquivos. */
+export async function postForBlob(url, body) {
+  const headers = new Headers({ "Content-Type": "application/json" });
+  if (DESKTOP_TOKEN) headers.set("X-Oscilo-Token", DESKTOP_TOKEN);
+  const res = await fetch(`${API}${url}`, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || res.statusText);
+  }
+  return res.blob();
+}
+
+/** Diálogo nativo "Salvar como" (Tauri). Retorna o caminho ou null. */
+export async function pickSavePath(defaultPath, filterName, extensions) {
+  const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
+  if (!invoke) throw new Error("Diálogo nativo indisponível.");
+  const res = await invoke("plugin:dialog|save", {
+    options: { title: "Salvar relatório", defaultPath, filters: [{ name: filterName, extensions }] },
+  });
+  if (!res) return null;
+  return typeof res === "string" ? res : res.path || null;
+}

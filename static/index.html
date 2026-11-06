@@ -16,7 +16,7 @@
       <div class="toolbar-group">
         <label class="btn file-btn">
           Abrir COMTRADE
-          <input type="file" id="file-input" accept=".cfg,.CFG" multiple hidden />
+          <input type="file" id="file-input" accept=".cfg,.CFG,.dat,.DAT" multiple hidden />
         </label>
         <button type="button" id="open-native" class="btn hidden" title="Abrir um arquivo .cfg do computador (o .dat é lido da mesma pasta)">Abrir…</button>
         <select id="recent-select" class="select select-recent hidden" title="Abertos recentemente">
@@ -25,6 +25,7 @@
         <select id="sample-select" class="select" title="Oscilografias de exemplo">
           <option value="">Exemplos…</option>
         </select>
+        <button type="button" id="open-merge" class="btn" title="Juntar oscilografias de terminais diferentes numa base de tempo comum">Juntar registros</button>
       </div>
       <div class="toolbar-group osc-only">
         <button id="zoom-in" class="btn" title="Zoom in">+</button>
@@ -49,6 +50,14 @@
         <button id="add-marker" class="btn" title="Adicionar marcador no cursor">+ Marcador</button>
         <button id="clear-markers" class="btn" title="Limpar marcadores">Limpar</button>
       </div>
+      <div class="toolbar-group cursors-group osc-only">
+        <button id="set-c1" class="btn btn-c1" title="Fixar o cursor C1 na posição do mouse (tecla 1). Arraste a linha para ajustar.">C1</button>
+        <button id="set-c2" class="btn btn-c2" title="Fixar o cursor C2 na posição do mouse (tecla 2). Arraste a linha para ajustar.">C2</button>
+        <button id="clear-cursors" class="btn" title="Remover C1 e C2">×</button>
+      </div>
+      <div class="toolbar-group">
+        <button id="open-report" class="btn" title="Gerar relatório (Word, HTML ou PDF)">Relatório</button>
+      </div>
     </header>
 
     <div class="main">
@@ -61,20 +70,23 @@
           </div>
         </div>
         <div id="record-info" class="record-info"></div>
-        <div class="channel-section">
-          <h3>Analógicos</h3>
+        <nav class="side-tabs" role="tablist">
+          <button type="button" class="side-tab active" data-pane="analog">Analógicos <span class="side-count" id="count-analog"></span></button>
+          <button type="button" class="side-tab" data-pane="digital">Digitais <span class="side-count" id="count-digital"></span></button>
+          <button type="button" class="side-tab" data-pane="phasor" id="tab-phasor" disabled>Fasores</button>
+        </nav>
+        <div class="channel-section side-pane active" data-pane="analog">
           <input type="search" id="analog-search" class="channel-search" placeholder="Buscar canal analógico…" />
           <div id="analog-channels" class="channel-list"></div>
         </div>
-        <div class="channel-section">
-          <h3>Digitais</h3>
+        <div class="channel-section side-pane" data-pane="digital">
           <input type="search" id="digital-search" class="channel-search" placeholder="Buscar canal digital…" />
           <div id="digital-channels" class="channel-list"></div>
         </div>
-        <div class="channel-section phasor-section hidden" id="phasor-section">
-          <h3>Fasores</h3>
+        <div class="channel-section side-pane phasor-section hidden" data-pane="phasor" id="phasor-section">
           <div class="phasor-controls">
             <p id="no-groups-hint" class="phasor-hint hidden">Nenhum conjunto trifásico reconhecido pelos nomes dos canais. Defina um grupo manualmente.</p>
+            <p id="rotation-hint" class="phasor-hint hidden"></p>
             <label class="phasor-field">
               Tensão
               <select id="voltage-group" class="select phasor-select"></select>
@@ -131,6 +143,10 @@
         <div class="dock-inner">
           <nav class="dock-tabs"></nav>
           <div class="dock-body"></div>
+          <div id="phasor-panel" class="phasor-panel hidden">
+            <button type="button" class="phasor-panel-header" title="Recolher/expandir">Grandezas no cursor <span class="pp-toggle">▾</span></button>
+            <div id="phasor-table-wrap" class="phasor-table-wrap"></div>
+          </div>
         </div>
       </aside>
     </div>
@@ -158,16 +174,43 @@
       </form>
     </dialog>
 
-    <div id="phasor-panel" class="phasor-panel hidden">
-      <div class="phasor-panel-header">Grandezas fasoriais no cursor</div>
-      <div id="phasor-table-wrap" class="phasor-table-wrap"></div>
-    </div>
+    <dialog id="report-dialog" class="group-dialog report-dialog">
+      <form method="dialog" autocomplete="off">
+        <h3>Relatório de análise</h3>
+        <label>Título <input name="title" class="an-input" maxlength="200" /></label>
+        <div class="rp-row">
+          <label>Ocorrência <input name="occurrence" class="an-input" maxlength="200" placeholder="nº / equipamento" /></label>
+          <label>Analista <input name="analyst" class="an-input" maxlength="120" /></label>
+        </div>
+        <label>Comentários / análise <textarea name="comments" class="an-input rp-text" rows="4" maxlength="20000" placeholder="Descrição da sequência, comportamento da proteção… (linha em branco separa parágrafos)"></textarea></label>
+        <label>Conclusão <textarea name="conclusion" class="an-input rp-text" rows="2" maxlength="20000" placeholder="Ex.: atuação correta e seletiva."></textarea></label>
+        <fieldset class="rp-sections">
+          <legend>Incluir</legend>
+          <label><input type="checkbox" name="s_summary" checked /> Resumo da perturbação</label>
+          <label><input type="checkbox" name="s_protection" checked /> Atuação da proteção</label>
+          <label><input type="checkbox" name="s_events" checked /> Sequência de eventos</label>
+          <label><input type="checkbox" name="s_cursors" checked /> Medições C1/C2</label>
+          <label><input type="checkbox" name="fig_view" checked /> Figura: oscilografia visível</label>
+          <label><input type="checkbox" name="fig_dock" /> Figura: gráfico da aba de análise aberta</label>
+        </fieldset>
+        <p class="rp-hint muted"></p>
+        <p class="dlg-error"></p>
+        <div class="dlg-actions">
+          <button value="cancel" class="btn" formnovalidate>Fechar</button>
+          <button value="print" class="btn" title="Abre a impressão – escolha &quot;Salvar como PDF&quot;">Imprimir / PDF</button>
+          <button value="html" class="btn">HTML</button>
+          <button value="docx" class="btn btn-primary">Word (.docx)</button>
+        </div>
+      </form>
+    </dialog>
+
 
     <footer class="statusbar">
       <span id="status-position">Posição: —</span>
       <span id="status-selection">Seleção: —</span>
       <span id="status-zoom">Zoom: 100%</span>
       <span id="status-markers">Marcadores: 0</span>
+      <span id="status-cursors">C1/C2: teclas 1 e 2</span>
     </footer>
   </div>
 

@@ -96,23 +96,10 @@ export function renderPhasorTable(container, metrics) {
     container.innerHTML = '<p class="phasor-empty">Posicione o cursor para ver as grandezas.</p>';
     return;
   }
-
-  const rows = metrics
-    .map(
-      (m) => `
-      <tr>
-        <td>${m.name}</td>
-        <td class="num">${formatDerivedValue(m.value, m.unit)}</td>
-      </tr>`
-    )
-    .join("");
-
-  container.innerHTML = `
-    <table class="phasor-table">
-      <thead><tr><th>Grandeza</th><th>Valor</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-  `;
+  // grade compacta de pares nome/valor (2 colunas): ocupa pouca altura no painel
+  container.innerHTML = `<div class="pq-grid">${metrics
+    .map((m) => `<span class="pq-name">${m.name}</span><span class="pq-val">${formatDerivedValue(m.value, m.unit)}</span>`)
+    .join("")}</div>`;
 }
 
 export { METRIC_GROUPS };

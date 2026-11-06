@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from analysis import AnalysisRequest, list_analyses
 import protection  # noqa: F401  (registra as funções de proteção)
 from comtrade_service import store
+from merge import MODES as MERGE_MODES, merge_records
+from report import ReportOptions, build_report
 import hmac
 
 from config import (
@@ -34,7 +36,7 @@ STATIC_DIR = ROOT / "static"
 
 app = FastAPI(
     title="Oscilografias COMTRADE",
-    version="0.6.2",
+    version="0.7.0",
     docs_url=None if IS_PRODUCTION else "/docs",
     redoc_url=None if IS_PRODUCTION else "/redoc",
     openapi_url=None if IS_PRODUCTION else "/openapi.json",
@@ -80,6 +82,40 @@ class AnalysisBody(BaseModel):
     inputs: dict[str, str] = Field(default_factory=dict)
 
 
+class MergeItem(BaseModel):
+    id: str = Field(..., max_length=64)
+    label: str = Field("", max_length=40)
+    offset_ms: float = Field(0.0, ge=-3_600_000, le=3_600_000)
+
+
+class MergeBody(BaseModel):
+    records: list[MergeItem] = Field(..., min_length=2, max_length=6)
+    mode: str = Field("onset", max_length=16)
+    reference: str | None = Field(None, max_length=64)
+
+
+class ReportImage(BaseModel):
+    caption: str = Field("", max_length=300)
+    data: str = Field(..., max_length=9_000_000)  # PNG em base64 (ou data URL)
+
+
+class ReportBody(BaseModel):
+    format: str = Field("docx", pattern="^(docx|html)$")
+    title: str = Field("Relatório de análise de perturbação", max_length=200)
+    analyst: str = Field("", max_length=120)
+    occurrence: str = Field("", max_length=200)
+    comments: str = Field("", max_length=20_000)
+    conclusion: str = Field("", max_length=20_000)
+    sections: dict[str, bool] = Field(default_factory=dict)
+    voltage_group: str | None = Field(None, max_length=200)
+    current_group: str | None = Field(None, max_length=200)
+    summary_params: dict = Field(default_factory=dict)
+    cursors: dict | None = None
+    images: list[ReportImage] = Field(default_factory=list, max_length=12)
+    source_name: str = Field("", max_length=260)
+    save_path: str | None = Field(None, max_length=4096)  # só na versão desktop
+
+
 def _meta_to_dict(meta) -> dict:
     return {
         "id": meta.id,
@@ -92,6 +128,8 @@ def _meta_to_dict(meta) -> dict:
         "total_samples": meta.total_samples,
         "duration_s": meta.duration_s,
         "frequency_hz": meta.frequency_hz,
+        "source_name": meta.source_name,
+        "merge": meta.merge,
         "analog_channels": [
             {
                 "index": ch.index,
@@ -196,7 +234,7 @@ def load_from_local_path(body: LoadPathRequest):
 def load_sample(body: LoadSampleRequest):
     try:
         cfg_path = get_sample_cfg_path(SAMPLES_DIR, body.sample_id.strip())
-        meta = store.load_from_path(cfg_path)
+        meta = store.load_from_path(cfg_path, f"{body.sample_id.strip()}.cfg")
         return _meta_to_dict(meta)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Exemplo não encontrado.") from exc
@@ -227,12 +265,52 @@ async def load_from_upload(
             await _save_upload_limited(cfg, cfg_path, "CFG")
             await _save_upload_limited(dat, dat_path, "DAT")
             # decodificação é CPU-bound: roda fora do loop de eventos
-            meta = await run_in_threadpool(store.load_from_upload, cfg_path, dat_path)
+            meta = await run_in_threadpool(store.load_from_upload, cfg_path, dat_path,
+                                           Path((cfg.filename or "").replace("\\", "/")).name or None)
         return _meta_to_dict(meta)
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=_error_detail(exc)) from exc
+
+
+@app.get("/api/records")
+def list_loaded_records():
+    """Registros na memória do servidor (mais recentes primeiro)."""
+    return {"records": [
+        {
+            "id": m.id,
+            "station": m.station,
+            "device": m.device,
+            "source_name": m.source_name,
+            "start_time": m.start_time,
+            "trigger_time": m.trigger_time,
+            "sample_rate_hz": m.sample_rate_hz,
+            "duration_s": m.duration_s,
+            "analog": len(m.analog_channels),
+            "digital": len(m.digital_channels),
+            "merged": m.merge is not None,
+        }
+        for m in store.list_records()
+    ]}
+
+
+@app.post("/api/merge")
+def merge(body: MergeBody):
+    """Junta 2 a 6 registros carregados numa base de tempo comum (registro combinado)."""
+    if body.mode not in MERGE_MODES:
+        raise HTTPException(status_code=400, detail="Modo de alinhamento inválido.")
+    try:
+        meta = run_merge(body)
+        return _meta_to_dict(meta)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Registro não encontrado (abra-o novamente).") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_error_detail(exc)) from exc
+
+
+def run_merge(body: MergeBody):
+    return merge_records(store, [r.model_dump() for r in body.records], body.mode, body.reference)
 
 
 @app.get("/api/records/{record_id}")
@@ -370,6 +448,52 @@ def run_analysis(record_id: str, analysis_id: str, body: AnalysisBody):
         raise HTTPException(status_code=404, detail=str(exc).strip("'")) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=_error_detail(exc)) from exc
+
+
+@app.post("/api/records/{record_id}/report")
+def make_report(record_id: str, body: ReportBody):
+    """Gera o relatório (DOCX ou HTML). Na versão desktop pode gravar direto no
+    caminho escolhido no diálogo "Salvar"."""
+    try:
+        ctx = store.context(record_id)
+        opts = ReportOptions(
+            title=body.title.strip() or "Relatório de análise de perturbação",
+            analyst=body.analyst.strip(),
+            occurrence=body.occurrence.strip(),
+            comments=body.comments,
+            conclusion=body.conclusion,
+            sections=body.sections,
+            voltage_group=body.voltage_group,
+            current_group=body.current_group,
+            summary_params=body.summary_params,
+            cursors=body.cursors,
+            images=[img.model_dump() for img in body.images],
+            source_name=Path(body.source_name.replace("\\", "/")).name,
+            app_version=app.version,
+        )
+        content = build_report(ctx, opts, body.format)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Registro não encontrado.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=_error_detail(exc)) from exc
+
+    media = ("application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+             if body.format == "docx" else "text/html; charset=utf-8")
+    if body.save_path:
+        if not IS_DESKTOP:
+            raise HTTPException(status_code=404, detail="Gravar em disco só na versão desktop.")
+        dest = Path(body.save_path).expanduser()
+        if dest.suffix.lower() != f".{body.format}":
+            dest = dest.with_suffix(f".{body.format}")
+        if not dest.parent.is_dir():
+            raise HTTPException(status_code=400, detail="Pasta de destino inexistente.")
+        try:
+            dest.write_bytes(content)
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"Não foi possível gravar: {exc}") from exc
+        return {"saved": str(dest.resolve()), "bytes": len(content)}
+    return Response(content=content, media_type=media,
+                    headers={"Content-Disposition": f'attachment; filename="relatorio.{body.format}"'})
 
 
 @app.get("/api/samples")

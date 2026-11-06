@@ -66,6 +66,10 @@ Guia completo: **[DEPLOY.md](../DEPLOY.md)** (GitHub + Railway passo a passo).
 3. **Canais**: marque/desmarque analógicos e digitais na barra lateral.
 4. **Fasores**: selecione grupos de tensão/corrente (ou crie um com "+ Grupo trifásico"), janela e estimador.
 5. **Análises**: posicione o cursor (Fasores) ou arraste na régua para selecionar um intervalo (Impedância/Harmônicos). `Esc` limpa a seleção. Cada aba tem "Parâmetros" (salvos no navegador).
+6. **Cursores C1/C2**: com o mouse sobre a oscilografia, tecle `1` ou `2` (ou use os botões C1/C2); arraste as linhas para ajustar. A aba **Cursores** mostra valores em cada um, Δt e estatísticas do trecho.
+7. **Eventos e Resumo**: a aba **Eventos** lista as mudanças dos canais digitais; a aba **Resumo** caracteriza a perturbação (início, tipo, máximos, tempos de proteção). Clique num instante para levar o cursor até ele.
+8. **Juntar registros**: botão "Juntar registros" – marque 2 a 6 oscilografias abertas (ou adicione arquivos no próprio diálogo), escolha o alinhamento (início da perturbação, trigger ou horário GPS) e, se preciso, um ajuste em ms por registro. Os canais ganham o rótulo do terminal ("TERMINAL_A: Ia…"). "Ajustar alinhamento…" na barra lateral refaz a junção mantendo os canais exibidos.
+9. **Relatório**: botão "Relatório" (ou "Gerar relatório…" no Resumo) gera DOCX, HTML ou PDF (impressão) com resumo, eventos, cursores, figuras e o texto do analista.
 
 ## Modo Proteção
 
@@ -98,14 +102,18 @@ Crie `backend/protection/minha.py` com uma classe `@register` (`category = "prot
 ```
 backend/analysis/
 ├── dsp.py          # estimadores fasoriais vetorizados (registro @register_estimator)
-├── groups.py       # detecção/definição de grupos trifásicos
+├── groups.py       # grupos trifásicos: letras, cores (AZ/BR/VR), campo ph, ordem dos canais; rotação ABC/ACB
 ├── context.py      # AnalysisContext: tempo↔amostra, sinais primários, fasores, grupos
 ├── registry.py     # Analysis, Param, @register
-└── builtin/        # phasor_diagram.py, impedance.py, harmonics.py
+├── sequence.py     # SOE: transições digitais, classificação dos canais pelo nome, trigger
+└── builtin/        # summary.py, events.py, cursors.py, phasor_diagram.py, impedance.py, harmonics.py
+backend/merge.py    # registro combinado: alinhamento (perturbação/trigger/GPS) e reamostragem
+backend/report/     # relatório: builder.py (conteúdo → DOCX/HTML), docx.py (DOCX sem dependências)
 static/js/analyses/
 ├── dock.js         # painel com abas, formulário automático de parâmetros, disparo/concorrência
 ├── index.js        # registro das views
-└── views/          # phasor-diagram.js, impedance.js, harmonics.js
+└── views/          # summary.js, events.js, cursors.js, phasor-diagram.js, impedance.js, harmonics.js
+static/js/report.js         # diálogo do relatório, captura das figuras
 static/js/plots/xyplot.js   # plano XY com zoom/pan reutilizável
 ```
 
@@ -131,6 +139,7 @@ Oscilografias/
 │   ├── phasor_analysis.py
 │   ├── analysis/          # núcleo de análises plugáveis
 │   ├── protection/        # funções de proteção (21, 78, 87T, 50/51/67)
+│   ├── report/            # relatório DOCX/HTML
 │   ├── desktop_server.py  # entrada do servidor na versão desktop
 │   ├── tests/
 │   └── requirements.txt
@@ -158,6 +167,9 @@ Oscilografias/
 | DELETE | `/api/records/{id}/groups/{group_id}` | Remove grupo manual |
 | GET | `/api/analyses` | Catálogo de análises com esquema de parâmetros |
 | POST | `/api/records/{id}/analyses/{analysis_id}` | Executa análise `{time_s, t_start, t_end, voltage_group, current_group, channels, params}` |
+| GET | `/api/records` | Registros abertos na sessão do servidor |
+| POST | `/api/merge` | Junta registros `{records: [{id, label, offset_ms}], mode: onset\|trigger\|absolute, reference}` |
+| POST | `/api/records/{id}/report` | Gera relatório `{format: docx\|html, title, analyst, comments, conclusion, sections, cursors, images}`; na versão desktop aceita `save_path` |
 
 ### Oscilografias grandes
 

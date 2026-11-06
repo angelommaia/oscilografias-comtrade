@@ -22,6 +22,7 @@ class RecordData:
     digital: list[np.ndarray]
     manual_groups: list[dict[str, Any]] = field(default_factory=list)
     auto_groups: list[dict[str, Any]] = field(default_factory=list)
+    ranges: dict[int, tuple[float, float]] = field(default_factory=dict)  # mín/máx do registro (cache)
 
     @property
     def groups(self) -> list[dict[str, Any]]:

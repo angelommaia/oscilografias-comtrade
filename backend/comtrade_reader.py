@@ -217,7 +217,11 @@ def _read_binary(cfg, dat_path: Path, ft: str) -> ParsedRecord:
 def _read_ascii(cfg, dat_path: Path) -> ParsedRecord:
     na = int(cfg.analog_count)
     ns = int(cfg.status_count)
-    data = np.loadtxt(dat_path, delimiter=",", dtype=np.float64, ndmin=2, encoding="latin-1")
+    # ignora linhas vazias e o caractere de fim de arquivo do DOS (0x1A) que
+    # alguns IEDs gravam no final
+    with dat_path.open("r", encoding="latin-1", newline="") as fh:
+        lines = (ln for ln in fh if ln.strip(" \t\r\n\x1a"))
+        data = np.loadtxt(lines, delimiter=",", dtype=np.float64, ndmin=2)
     if data.shape[1] < 2 + na + ns:
         raise ValueError("Número de colunas do .dat ASCII incompatível com o .cfg.")
     warnings: list[str] = []

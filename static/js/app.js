@@ -28,6 +28,9 @@ import { AnalysisDock } from "./analyses/index.js";
 import { removeGroup } from "./analyses/api.js";
 import { openGroupDialog } from "./analyses/groups-dialog.js";
 import { ProtectionView } from "./protection/view.js";
+import { openReportDialog } from "./report.js";
+import { mergeInfoHtml, openMergeDialog } from "./merge.js";
+import { addGroup } from "./analyses/api.js";
 import {
   drawAnalogWaveform,
   drawDigitalWaveform,
@@ -44,6 +47,8 @@ const state = {
   cursorTime: null,
   selection: null,
   markers: [],
+  fixedCursors: { c1: null, c2: null },
+  sourceName: "",
   waveformCache: null,
   markerCounter: 1,
   refreshGeneration: 0,
@@ -73,6 +78,7 @@ const els = {
   statusSelection: document.getElementById("status-selection"),
   statusZoom: document.getElementById("status-zoom"),
   statusMarkers: document.getElementById("status-markers"),
+  statusCursors: document.getElementById("status-cursors"),
   navScrollBar: document.getElementById("nav-scroll-bar"),
   navScroll: document.getElementById("nav-scroll"),
   phasorSection: document.getElementById("phasor-section"),
@@ -86,6 +92,7 @@ const els = {
   addGroupBtn: document.getElementById("add-group"),
   removeGroupBtn: document.getElementById("remove-group"),
   noGroupsHint: document.getElementById("no-groups-hint"),
+  rotationHint: document.getElementById("rotation-hint"),
   toggleDock: document.getElementById("toggle-dock"),
   dock: document.getElementById("analysis-dock"),
   groupDialog: document.getElementById("group-dialog"),
@@ -104,6 +111,13 @@ const analysisCtx = {
   },
   get cursorTime() {
     return state.cursorTime;
+  },
+  /** Cursores fixos C1/C2 (s) – null quando não posicionados. */
+  get fixedCursors() {
+    return { ...state.fixedCursors };
+  },
+  get sourceName() {
+    return state.sourceName;
   },
   get selection() {
     return state.selection ? normalizeSelection(state.selection) : null;
@@ -124,6 +138,25 @@ const analysisCtx = {
     const analog = new Set((state.record?.analog_channels || []).map((c) => c.index));
     return Array.from(state.selectedChannels).filter((i) => analog.has(i)).sort((a, b) => a - b);
   },
+  /** Todos os canais exibidos (analógicos e digitais), em ordem. */
+  selectedChannels() {
+    return Array.from(state.selectedChannels).sort((a, b) => a - b);
+  },
+  /** Mostra um canal na oscilografia (ex.: clique num evento digital). */
+  addChannel(index) {
+    if (state.selectedChannels.has(index)) return;
+    state.selectedChannels.add(index);
+    syncChannelCheckboxes();
+    refreshView();
+    bus.emit("channels");
+  },
+  /** Imagem PNG (data URL) das faixas visíveis, com régua, marcadores e C1/C2. */
+  captureView(options) {
+    return captureView(options);
+  },
+  openReport() {
+    openReportDialog(analysisCtx);
+  },
   /** Move o cursor (ex.: clique num ponto da trajetória de impedância). */
   setCursor(time) {
     setCursorTime(time, { reveal: true });
@@ -135,6 +168,8 @@ const analysisCtx = {
 
 const emitCursor = () => bus.emit("cursor", state.cursorTime);
 const emitSelection = () => bus.emit("selection", analysisCtx.selection);
+const emitFixedCursors = () => bus.emit("cursors", analysisCtx.fixedCursors);
+const emitFixedCursorsLater = debounce(emitFixedCursors, 150);
 const dock = new AnalysisDock(els.dock, analysisCtx);
 const protectionView = new ProtectionView(document.getElementById("protection-view"), analysisCtx);
 
@@ -159,6 +194,9 @@ const ruler = new TimelineRuler(els.rulerCanvas, (event) => {
 });
 
 function init() {
+  appendFixedCursorLines(els.rulerCanvas.parentElement);
+  bindSideTabs();
+  bindPhasorPanel();
   bindToolbar();
   bindDesktop();
   bindDock();
@@ -170,6 +208,69 @@ function init() {
   dock.init();
   protectionView.init();
   bindModeTabs();
+}
+
+// ---------------------------------------------------------------------------
+// Barra lateral em abas (Analógicos | Digitais | Fasores)
+// ---------------------------------------------------------------------------
+function setSideTab(name) {
+  const tab = document.querySelector(`.side-tab[data-pane="${name}"]`);
+  if (!tab || tab.disabled) name = "analog";
+  document.querySelectorAll(".side-tab").forEach((b) => b.classList.toggle("active", b.dataset.pane === name));
+  document.querySelectorAll(".side-pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === name));
+  try {
+    localStorage.setItem("oscilo.sideTab", name);
+  } catch {
+    /* ignora */
+  }
+}
+
+function bindSideTabs() {
+  document.querySelectorAll(".side-tab").forEach((b) => b.addEventListener("click", () => setSideTab(b.dataset.pane)));
+  let saved = "analog";
+  try {
+    saved = localStorage.getItem("oscilo.sideTab") || "analog";
+  } catch {
+    /* ignora */
+  }
+  setSideTab(saved);
+}
+
+/** Habilita a aba Fasores só quando o registro tem configuração fasorial. */
+function updateSideTabs() {
+  const tab = document.getElementById("tab-phasor");
+  const available = !els.phasorSection.classList.contains("hidden");
+  tab.disabled = !available;
+  let wanted = "analog";
+  try {
+    wanted = localStorage.getItem("oscilo.sideTab") || "analog";
+  } catch {
+    /* ignora */
+  }
+  const active = document.querySelector(".side-tab.active")?.dataset.pane;
+  if (active === "phasor" && !available) setSideTab("analog");
+  else if (wanted === "phasor" && available && active !== "phasor") setSideTab("phasor");
+}
+
+function bindPhasorPanel() {
+  const header = els.phasorPanel.querySelector(".phasor-panel-header");
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem("oscilo.phasorPanel.collapsed") === "1";
+  } catch {
+    /* ignora */
+  }
+  els.phasorPanel.classList.toggle("collapsed", collapsed);
+  header.addEventListener("click", () => {
+    collapsed = !collapsed;
+    els.phasorPanel.classList.toggle("collapsed", collapsed);
+    try {
+      localStorage.setItem("oscilo.phasorPanel.collapsed", collapsed ? "1" : "0");
+    } catch {
+      /* ignora */
+    }
+    dock.resize();
+  });
 }
 
 function bindModeTabs() {
@@ -302,7 +403,32 @@ function bindToolbar() {
 
   els.navScroll.addEventListener("input", onNavScroll);
 
+  document.getElementById("set-c1").addEventListener("click", () => setFixedCursor("c1"));
+  document.getElementById("set-c2").addEventListener("click", () => setFixedCursor("c2"));
+  document.getElementById("clear-cursors").addEventListener("click", () => {
+    state.fixedCursors = { c1: null, c2: null };
+    updateFixedCursorLines();
+    updateStatus();
+    emitFixedCursors();
+  });
+  document.getElementById("open-report").addEventListener("click", () => openReportDialog(analysisCtx));
+  document.getElementById("open-merge").addEventListener("click", openMerge);
+  els.recordInfo.addEventListener("click", (e) => {
+    if (e.target.closest(".mg-adjust")) openMerge();
+  });
+  els.rotationHint.addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-swap]");
+    if (btn) swapGroupPhases(btn.dataset.swap);
+  });
+
   window.addEventListener("keydown", (e) => {
+    const typing = e.target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]");
+    if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2")
+        && !document.body.classList.contains("mode-prot")) {
+      setFixedCursor(e.key === "1" ? "c1" : "c2");
+      e.preventDefault();
+      return;
+    }
     if (e.key === "Escape" && state.selection && !els.groupDialog.open) {
       state.selection = null;
       ruler.setSelection(null);
@@ -392,7 +518,7 @@ async function onSampleSelected() {
   setLoading("Carregando exemplo…");
   try {
     const record = await loadSample(sampleId);
-    setRecord(record);
+    setRecord(record, `${sampleId}.cfg`);
   } catch (err) {
     alert(`Erro ao carregar: ${err.message}`);
   } finally {
@@ -412,7 +538,7 @@ async function onFileSelected(e) {
   setLoading(`Enviando e lendo ${escapeHtml(cfg.name)} (${sizeMb} MB)…`);
   try {
     const record = await loadFromUpload(cfg, dat);
-    setRecord(record);
+    setRecord(record, cfg.name);
   } catch (err) {
     alert(`Erro ao carregar: ${err.message}`);
   } finally {
@@ -459,7 +585,7 @@ async function openLocalPath(path) {
   setLoading(`Lendo ${escapeHtml(path.split(/[\\/]/).pop())}…`);
   try {
     const record = await loadFromPath(path);
-    setRecord(record);
+    setRecord(record, path);
     pushRecent(record.source_path || path);
     document.title = `${path.split(/[\\/]/).pop()} – Oscilo`;
   } catch (err) {
@@ -517,16 +643,27 @@ function setLoading(message) {
   el.innerHTML = `<span class="spinner"></span>${message}`;
 }
 
-function setRecord(record) {
+function setRecord(record, sourceName = "", { keep = false } = {}) {
+  const prev = state.record;
+  const sameLayout = keep && prev
+    && prev.analog_channels.length === record.analog_channels.length
+    && prev.digital_channels.length === record.digital_channels.length;
+  const keptChannels = sameLayout ? new Set(state.selectedChannels) : null;
   state.record = record;
+  state.sourceName = record.source_path || sourceName || record.source_name || "";
   state.selectedChannels.clear();
   state.waveformCache = null;
-  state.markers = [];
-  state.markerCounter = 1;
-  state.viewStart = 0;
-  state.viewEnd = record.duration_s || 1;
+  if (!sameLayout) {
+    state.markers = [];
+    state.markerCounter = 1;
+    state.fixedCursors = { c1: null, c2: null };
+    state.viewStart = 0;
+    state.viewEnd = record.duration_s || 1;
+    state.selection = null;
+  } else {
+    state.viewEnd = Math.min(state.viewEnd, record.duration_s || 1);
+  }
   state.cursorTime = null;
-  state.selection = null;
   state.analogFilter = "";
   state.digitalFilter = "";
   els.analogSearch.value = "";
@@ -535,11 +672,65 @@ function setRecord(record) {
   renderRecordInfo();
   renderChannelLists();
   bus.emit("record", record);
+  emitFixedCursors();
   loadPhasorConfig();
-  selectDefaultAnalog();
+  if (keptChannels && keptChannels.size) {
+    keptChannels.forEach((i) => state.selectedChannels.add(i));
+    syncChannelCheckboxes();
+    refreshView();
+    bus.emit("channels");
+  } else {
+    selectDefaultAnalog();
+  }
+}
+
+function openMerge() {
+  openMergeDialog({
+    current: state.record,
+    onMerged: (meta) => setRecord(meta, meta.source_name, { keep: !!state.record?.merge }),
+  });
+}
+
+/** Cria um grupo manual com B e C trocadas (corrige sequência ACB). */
+async function swapGroupPhases(groupId) {
+  const groups = [...(state.phasorConfig?.voltage_groups || []), ...(state.phasorConfig?.current_groups || [])];
+  const g = groups.find((x) => x.id === groupId);
+  if (!g || !state.record) return;
+  try {
+    const res = await addGroup(state.record.id, {
+      quantity: g.quantity,
+      label: `${g.label} (B↔C)`.slice(0, 60),
+      a: g.a,
+      b: g.c,
+      c: g.b,
+    });
+    if (g.quantity === "V") state.voltageGroupId = res.group.id;
+    else state.currentGroupId = res.group.id;
+    applyPhasorConfig(res.config);
+  } catch (err) {
+    alert(err.message);
+  }
+}
+
+function updateRotationHint() {
+  const groups = [...(state.phasorConfig?.voltage_groups || []), ...(state.phasorConfig?.current_groups || [])];
+  const parts = [];
+  for (const id of [state.voltageGroupId, state.currentGroupId]) {
+    const g = groups.find((x) => x.id === id);
+    if (!g) continue;
+    if (g.rotation === "ACB") {
+      parts.push(`<b>${escapeHtml(g.label)}</b>: sequência negativa dominante (ACB) – fases provavelmente trocadas.
+        <button type="button" class="link-btn" data-swap="${escapeHtml(g.id)}">Corrigir (trocar B↔C)</button>`);
+    } else if (g.inferred) {
+      parts.push(`<span title="${escapeHtml(g.label)}: fases tomadas pela ${escapeHtml(g.inferred)}">${g.quantity === "V" ? "Tensão" : "Corrente"}: fases pela ordem dos canais · ${g.rotation ? `rotação ${g.rotation}` : "rotação não verificada"}</span>`);
+    }
+  }
+  els.rotationHint.innerHTML = parts.join("<br>");
+  els.rotationHint.classList.toggle("hidden", !parts.length);
 }
 
 function onGroupsChanged() {
+  updateRotationHint();
   const both = !!(state.voltageGroupId && state.currentGroupId);
   els.phasorPanel.classList.toggle("hidden", !both || document.body.classList.contains("mode-prot"));
   els.removeGroupBtn.classList.toggle(
@@ -558,6 +749,7 @@ async function loadPhasorConfig() {
   state.currentGroupId = null;
   els.phasorSection.classList.add("hidden");
   els.phasorPanel.classList.add("hidden");
+  updateSideTabs();
 
   if (!state.record) return;
 
@@ -582,10 +774,13 @@ function applyPhasorConfig(config) {
   if (!vIds.includes(state.voltageGroupId)) state.voltageGroupId = config.default_voltage_group;
   if (!iIds.includes(state.currentGroupId)) state.currentGroupId = config.default_current_group;
 
+  const tag = (g) => (g.source === "manual" ? " (manual)" : "")
+    + (g.rotation === "ACB" ? " ⚠ ACB" : "")
+    + (g.inferred ? " · ordem" : "");
   const opts = (groups) =>
     `<option value="">—</option>` +
     groups
-      .map((g) => `<option value="${escapeHtml(g.id)}">${escapeHtml(g.label)}${g.source === "manual" ? " (manual)" : ""}</option>`)
+      .map((g) => `<option value="${escapeHtml(g.id)}" title="${g.rotation ? `Rotação ${g.rotation}` : "Rotação não verificada"}">${escapeHtml(g.label)}${tag(g)}</option>`)
       .join("");
   els.voltageGroup.innerHTML = opts(config.voltage_groups);
   els.currentGroup.innerHTML = opts(config.current_groups);
@@ -606,6 +801,7 @@ function applyPhasorConfig(config) {
   );
 
   els.phasorSection.classList.remove("hidden");
+  updateSideTabs();
   renderPhasorTable(els.phasorTableWrap, []);
   onGroupsChanged();
 }
@@ -614,6 +810,13 @@ function renderRecordInfo() {
   const r = state.record;
   if (!r) {
     els.recordInfo.innerHTML = "";
+    return;
+  }
+  if (r.merge) {
+    els.recordInfo.innerHTML = `
+      <strong>Registro combinado</strong> · ${r.merge.records.length} terminais<br/>
+      Taxa comum: ${r.sample_rate_hz.toFixed(0)} Hz · ${formatTime(r.duration_s)}<br/>
+      ${mergeInfoHtml(r)}`;
     return;
   }
   els.recordInfo.innerHTML = `
@@ -636,6 +839,8 @@ function renderChannelLists() {
   for (const ch of state.record.digital_channels) {
     els.digitalList.appendChild(createChannelItem(ch));
   }
+  document.getElementById("count-analog").textContent = `(${state.record.analog_channels.length})`;
+  document.getElementById("count-digital").textContent = `(${state.record.digital_channels.length})`;
 }
 
 function createChannelItem(ch) {
@@ -727,6 +932,7 @@ function applyViewChrome() {
   ruler.setMarkers(state.markers);
   updateCursorLines();
   updateMarkerLines();
+  updateFixedCursorLines();
   updateSelectionOverlay();
   updateInstantValues();
   updatePhasorPanel();
@@ -860,6 +1066,7 @@ function renderStackedTrack(ch) {
   for (const marker of state.markers) {
     wrap.appendChild(createMarkerLine(marker));
   }
+  appendFixedCursorLines(wrap);
 
   bindTrackInteraction(wrap);
   row.appendChild(gutter);
@@ -916,6 +1123,7 @@ function createOverlayRow(title, channels, small, channelMeta = null) {
   for (const marker of state.markers) {
     wrap.appendChild(createMarkerLine(marker));
   }
+  appendFixedCursorLines(wrap);
 
   bindTrackInteraction(wrap);
   row.appendChild(gutter);
@@ -945,8 +1153,8 @@ function redrawAllCanvases() {
       analog.map((ch, i) => ({
         times: ch.times,
         values: ch.values,
-        yMin: ch.cfg_min ?? ch.min,
-        yMax: ch.cfg_max ?? ch.max,
+        yMin: yRange(ch)[0],
+        yMax: yRange(ch)[1],
         color: palette[i % palette.length],
       })),
       { viewStart: state.viewStart, viewEnd: state.viewEnd }
@@ -955,15 +1163,32 @@ function redrawAllCanvases() {
 
   updateCursorLines();
   updateMarkerLines();
+  updateFixedCursorLines();
+}
+
+/** Faixa vertical: a do .cfg, a menos que seja muito maior que o sinal (ex.:
+ * conversor de 16 bits com fundo de escala de dezenas de kA) – aí usa o sinal. */
+function yRange(ch) {
+  if (ch.kind !== "analog") return [undefined, undefined];
+  const lo = ch.cfg_min ?? ch.min;
+  const hi = ch.cfg_max ?? ch.max;
+  const dataSpan = Math.max(Math.abs(ch.data_max ?? ch.max ?? 0), Math.abs(ch.data_min ?? ch.min ?? 0));
+  const cfgSpan = Math.max(Math.abs(lo ?? 0), Math.abs(hi ?? 0));
+  if (dataSpan > 0 && cfgSpan > 8 * dataSpan) {
+    const m = dataSpan * 1.05;
+    return [-m, m];
+  }
+  return [lo, hi];
 }
 
 function drawChannelCanvas(canvas, ch) {
+  const [yMin, yMax] = yRange(ch);
   const opts = {
     viewStart: state.viewStart,
     viewEnd: state.viewEnd,
     unit: ch.unit,
-    yMin: ch.kind === "analog" ? ch.cfg_min ?? ch.min : undefined,
-    yMax: ch.kind === "analog" ? ch.cfg_max ?? ch.max : undefined,
+    yMin,
+    yMax,
     color: ch.kind === "derived" ? "#6a4a8a" : undefined,
   };
 
@@ -1276,6 +1501,163 @@ function updateStatus() {
   const pct = ((duration / (state.viewEnd - state.viewStart)) * 100).toFixed(0);
   els.statusZoom.textContent = `Zoom: ${pct}%`;
   els.statusMarkers.textContent = `Marcadores: ${state.markers.length}`;
+  const { c1, c2 } = state.fixedCursors;
+  const parts = [];
+  if (c1 != null) parts.push(`C1 ${formatTime(c1)}`);
+  if (c2 != null) parts.push(`C2 ${formatTime(c2)}`);
+  if (c1 != null && c2 != null) parts.push(`Δt ${((c2 - c1) * 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 3 })} ms`);
+  els.statusCursors.textContent = parts.length ? parts.join(" · ") : "C1/C2: teclas 1 e 2";
+}
+
+// ---------------------------------------------------------------------------
+// Cursores fixos C1/C2 (arrastáveis)
+// ---------------------------------------------------------------------------
+function setFixedCursor(key, time = undefined) {
+  if (!state.record) return;
+  let t = time !== undefined ? time : state.cursorTime;
+  if (t == null) t = (state.viewStart + state.viewEnd) / 2;
+  state.fixedCursors[key] = snapToSample(t);
+  updateFixedCursorLines();
+  updateStatus();
+  emitFixedCursors();
+}
+
+/** Cursores fixos caem sempre sobre uma amostra (Δt exato). */
+function snapToSample(t) {
+  const r = state.record;
+  if (!r) return t;
+  const fs = r.sample_rate_hz || 0;
+  const k = fs > 0 ? Math.round(t * fs) / fs : t;
+  return Math.min(Math.max(k, 0), r.duration_s);
+}
+
+function createFixedCursor(key) {
+  const el = document.createElement("div");
+  el.className = `fixed-cursor ${key}`;
+  el.dataset.key = key;
+  el.dataset.label = key.toUpperCase();
+  el.title = `${key.toUpperCase()} – arraste para mover`;
+  el.addEventListener("mousedown", (e) => startFixedCursorDrag(e, el));
+  return el;
+}
+
+function appendFixedCursorLines(wrap) {
+  wrap.appendChild(createFixedCursor("c1"));
+  wrap.appendChild(createFixedCursor("c2"));
+}
+
+function startFixedCursorDrag(e, el) {
+  e.preventDefault();
+  e.stopPropagation();
+  const wrap = el.parentElement;
+  const key = el.dataset.key;
+  document.body.classList.add("dragging-cursor");
+  const onMove = (ev) => {
+    const rect = wrap.getBoundingClientRect();
+    const t = xToTime(Math.min(Math.max(ev.clientX - rect.left, 0), rect.width), rect.width);
+    state.fixedCursors[key] = snapToSample(t);
+    updateFixedCursorLines();
+    updateStatus();
+    emitFixedCursorsLater();
+  };
+  const onUp = () => {
+    document.body.classList.remove("dragging-cursor");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    emitFixedCursors();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+function updateFixedCursorLines() {
+  document.querySelectorAll(".fixed-cursor").forEach((el) => {
+    const t = state.fixedCursors[el.dataset.key];
+    const wrap = el.parentElement;
+    const visible = t != null && state.record && t >= state.viewStart && t <= state.viewEnd;
+    el.style.display = visible ? "block" : "none";
+    if (visible) el.style.left = `${timeToX(t, wrap.clientWidth)}px`;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Captura da oscilografia (figura do relatório)
+// ---------------------------------------------------------------------------
+const CURSOR_COLORS = { c1: "#b5179e", c2: "#0b7a75" };
+
+function captureView({ scale = 2 } = {}) {
+  const rows = Array.from(els.tracksContainer.querySelectorAll(".track-row")).filter((r) => r.offsetParent !== null);
+  if (!rows.length || !state.record) return null;
+  const wraps = rows.map((r) => r.querySelector(".track-canvas-wrap"));
+  const plotW = wraps[0].clientWidth;
+  const gutterW = 190;
+  const rulerH = els.rulerCanvas.clientHeight;
+  const heights = wraps.map((w) => w.clientHeight);
+  const footH = 22;
+  const totalH = rulerH + heights.reduce((a, b) => a + b + 1, 0) + footH;
+  const W = gutterW + plotW;
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(W * scale);
+  cv.height = Math.round(totalH * scale);
+  const g = cv.getContext("2d");
+  g.scale(scale, scale);
+  g.fillStyle = "#ffffff";
+  g.fillRect(0, 0, W, totalH);
+  g.fillStyle = "#e4e4e4";
+  g.fillRect(0, 0, gutterW, rulerH);
+  g.drawImage(els.rulerCanvas, gutterW, 0, plotW, rulerH);
+
+  const fit = (text, maxW) => {
+    if (g.measureText(text).width <= maxW) return text;
+    let t = text;
+    while (t.length > 1 && g.measureText(`${t}…`).width > maxW) t = t.slice(0, -1);
+    return `${t}…`;
+  };
+  let y = rulerH;
+  rows.forEach((row, i) => {
+    const h = heights[i];
+    const canvas = wraps[i].querySelector("canvas");
+    g.fillStyle = "#f4f4f4";
+    g.fillRect(0, y, gutterW, h);
+    g.fillStyle = "#2a2a2a";
+    g.font = "600 12px Segoe UI, Arial, sans-serif";
+    g.fillText(fit(row.querySelector(".name")?.textContent.trim() || "", gutterW - 12), 8, y + 18);
+    g.fillStyle = "#666";
+    g.font = "11px Segoe UI, Arial, sans-serif";
+    g.fillText(fit(row.querySelector(".meta")?.textContent.trim() || "", gutterW - 12), 8, y + 33);
+    g.fillStyle = "#fafafa";
+    g.fillRect(gutterW, y, plotW, h);
+    if (canvas) g.drawImage(canvas, gutterW, y, plotW, h);
+    g.strokeStyle = "#d0d0d0";
+    g.beginPath();
+    g.moveTo(0, y + h + 0.5);
+    g.lineTo(W, y + h + 0.5);
+    g.stroke();
+    y += h + 1;
+  });
+  const vline = (t, color, label, dash) => {
+    if (t == null || t < state.viewStart || t > state.viewEnd) return;
+    const x = gutterW + timeToX(t, plotW);
+    g.strokeStyle = color;
+    g.lineWidth = 1.2;
+    g.setLineDash(dash);
+    g.beginPath();
+    g.moveTo(x + 0.5, rulerH);
+    g.lineTo(x + 0.5, y);
+    g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = color;
+    g.font = "bold 11px Segoe UI, Arial, sans-serif";
+    g.fillText(label, x + 3, rulerH + 12);
+  };
+  state.markers.forEach((m) => vline(m.time, "#c06040", m.label, []));
+  vline(state.fixedCursors.c1, CURSOR_COLORS.c1, "C1", [5, 3]);
+  vline(state.fixedCursors.c2, CURSOR_COLORS.c2, "C2", [5, 3]);
+  g.fillStyle = "#555";
+  g.font = "11px Segoe UI, Arial, sans-serif";
+  const r = state.record;
+  g.fillText(`${r.station || ""} ${r.device ? `· ${r.device}` : ""} · janela ${formatTime(state.viewStart)} → ${formatTime(state.viewEnd)}`.trim(), 8, y + 15);
+  return cv.toDataURL("image/png");
 }
 
 function escapeHtml(str) {
