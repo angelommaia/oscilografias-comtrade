@@ -23,7 +23,19 @@ use tauri::{AppHandle, Manager, RunEvent, Url};
 
 struct Server(Mutex<Option<Child>>);
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+/// Limite de segurança. Enquanto o processo do servidor estiver vivo a janela
+/// continua esperando (em notebooks corporativos o antivírus pode levar minutos
+/// para liberar a primeira execução) e mostra o progresso na tela de abertura.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Versão instalada (NSIS grava o desinstalador ao lado do executável) × portátil.
+fn is_portable() -> bool {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| !d.join("uninstall.exe").is_file()))
+        .unwrap_or(false)
+        && cfg!(windows)
+}
 
 fn free_port() -> std::io::Result<u16> {
     Ok(TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
@@ -80,6 +92,8 @@ fn server_command(app: &AppHandle) -> Result<Command, String> {
 fn start_server(app: &AppHandle, port: u16, token: &str) -> Result<Child, String> {
     let mut cmd = server_command(app)?;
     cmd.args(["--port", &port.to_string(), "--token", token, "--parent-pid", &std::process::id().to_string()]);
+    // log sem buffer (etapas aparecem na hora) e sem gravar .pyc ao lado do programa
+    cmd.env("PYTHONUNBUFFERED", "1").env("PYTHONDONTWRITEBYTECODE", "1");
 
     // saída do servidor em <logs>/server.log (diagnóstico)
     if let Ok(dir) = app.path().app_log_dir() {
@@ -99,9 +113,10 @@ fn start_server(app: &AppHandle, port: u16, token: &str) -> Result<Child, String
     cmd.spawn().map_err(|e| format!("Falha ao iniciar o servidor: {e}"))
 }
 
-fn wait_ready(port: u16, child_alive: impl Fn() -> bool) -> Result<(), String> {
+fn wait_ready(port: u16, child_alive: impl Fn() -> bool, on_tick: impl Fn(u64)) -> Result<(), String> {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
     let start = Instant::now();
+    let mut last_tick = 0u64;
     while start.elapsed() < STARTUP_TIMEOUT {
         if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
             return Ok(());
@@ -109,9 +124,38 @@ fn wait_ready(port: u16, child_alive: impl Fn() -> bool) -> Result<(), String> {
         if !child_alive() {
             return Err("O servidor encerrou durante a inicialização (veja server.log).".into());
         }
+        let secs = start.elapsed().as_secs();
+        if secs != last_tick {
+            last_tick = secs;
+            on_tick(secs);
+        }
         std::thread::sleep(Duration::from_millis(150));
     }
     Err("Tempo esgotado aguardando o servidor (veja server.log).".into())
+}
+
+/// Última linha não vazia do server.log (etapa da inicialização).
+fn last_log_line(app: &AppHandle) -> String {
+    let Ok(dir) = app.path().app_log_dir() else { return String::new() };
+    let Ok(text) = fs::read_to_string(dir.join("server.log")) else { return String::new() };
+    text.lines()
+        .rev()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map(|l| l.chars().take(200).collect())
+        .unwrap_or_default()
+}
+
+fn show_status(app: &AppHandle, secs: u64) {
+    if let Some(w) = app.get_webview_window("main") {
+        let js = format!(
+            "window.setStatus && window.setStatus({}, {}, {})",
+            secs,
+            serde_json::to_string(&last_log_line(app)).unwrap_or_default(),
+            is_portable()
+        );
+        let _ = w.eval(&js);
+    }
 }
 
 fn show_error(app: &AppHandle, msg: &str) {
@@ -122,9 +166,10 @@ fn show_error(app: &AppHandle, msg: &str) {
             .map(|d| d.join("server.log").display().to_string())
             .unwrap_or_default();
         let js = format!(
-            "window.showError && window.showError({}, {})",
+            "window.showError && window.showError({}, {}, {})",
             serde_json::to_string(msg).unwrap_or_default(),
-            serde_json::to_string(&log).unwrap_or_default()
+            serde_json::to_string(&log).unwrap_or_default(),
+            is_portable()
         );
         let _ = w.eval(&js);
     }
@@ -161,7 +206,8 @@ pub fn run() {
                         None => false,
                     }
                 };
-                if let Err(e) = wait_ready(port, alive) {
+                let tick_handle = handle.clone();
+                if let Err(e) = wait_ready(port, alive, move |secs| show_status(&tick_handle, secs)) {
                     show_error(&handle, &e);
                     return;
                 }

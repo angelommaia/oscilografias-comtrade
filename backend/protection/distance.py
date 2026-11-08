@@ -242,6 +242,10 @@ class DistanceProtection(Analysis):
             "AG": ground_loop(va, ia), "BG": ground_loop(vb, ib), "CG": ground_loop(vc, ic),
             "AB": phase_loop(va - vb, ia - ib), "BC": phase_loop(vb - vc, ib - ic), "CA": phase_loop(vc - va, ic - ia),
         }
+        i_peak = max(float(np.nanmax(np.abs(x))) if np.isfinite(x).any() else 0.0 for x in (ia, ib, ic))
+        if i_peak < imin:
+            warnings.append(f"Corrente máxima {i_peak:.3g} A abaixo da corrente mínima de liberação ({imin:.3g} A) "
+                            "em todo o trecho: linha aberta/desenergizada? As trajetórias mostram só ruído.")
         i0_ok = np.abs(ires) >= i0min
         release = {
             "AG": (np.abs(ia) >= imin) & i0_ok, "BG": (np.abs(ib) >= imin) & i0_ok, "CG": (np.abs(ic) >= imin) & i0_ok,

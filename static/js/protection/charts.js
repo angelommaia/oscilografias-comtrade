@@ -7,16 +7,17 @@
 import { escapeHtml, fmtNum } from "../core/bus.js";
 import { formatTime } from "../api.js";
 import { XYPlot } from "../plots/xyplot.js";
-import { LOOP_STYLE, NEUTRAL_INK, PHASE_COLORS } from "../analyses/colors.js";
+import { INK, LOOP_STYLE, PHASE_COLORS } from "../analyses/colors.js";
+import { T as TH } from "../core/theme.js";
 
 // Zonas/estágios são ordinais (1 = mais importante): uma rampa de um só matiz,
 // do escuro ao claro, sempre com rótulo direto.
-const ORDINAL = ["#1f3b73", "#355e9e", "#5a84c2", "#86a8d6", "#a9bfdf"];
+const ord = (i) => TH.ordinal[i % TH.ordinal.length];
 
 function trajStyle(style, key) {
-  if (style === "loops") return LOOP_STYLE[key] || { color: NEUTRAL_INK, dash: [] };
-  if (style === "phases") return { color: PHASE_COLORS[key] || NEUTRAL_INK, dash: [] };
-  return { color: "#222", dash: [] };
+  if (style === "loops") return LOOP_STYLE[key] || { color: INK.neutral, dash: [] };
+  if (style === "phases") return { color: PHASE_COLORS[key] || INK.neutral, dash: [] };
+  return { color: TH.ink, dash: [] };
 }
 
 function nearestByTime(d, t) {
@@ -174,7 +175,7 @@ export class MainChart {
       if (gm.kind !== "line") g.closePath();
       let label = gm.label;
       if (gm.kind === "zone") {
-        const col = ORDINAL[(gm.zone - 1) % ORDINAL.length];
+        const col = ord(gm.zone - 1);
         g.fillStyle = hexA(col, 0.05);
         g.fill();
         g.strokeStyle = col;
@@ -189,19 +190,19 @@ export class MainChart {
         g.setLineDash([4, 3]);
         g.stroke();
       } else if (gm.kind === "blinder_outer" || gm.kind === "blinder_inner") {
-        g.strokeStyle = "#555";
+        g.strokeStyle = TH.textMuted;
         g.lineWidth = gm.kind === "blinder_inner" ? 1.8 : 1.2;
         g.setLineDash(gm.kind === "blinder_outer" ? [6, 4] : []);
         g.stroke();
       } else if (gm.kind === "operate") {
         g.fillStyle = "rgba(184,71,28,0.07)";
         g.fill();
-        g.strokeStyle = "#8a3415";
+        g.strokeStyle = TH.trip;
         g.lineWidth = 2;
         g.stroke();
         label = "Operação";
       } else if (gm.kind === "line") {
-        g.strokeStyle = "#8a3415";
+        g.strokeStyle = TH.trip;
         g.lineWidth = 1.5;
         g.setLineDash([6, 3]);
         g.stroke();
@@ -212,23 +213,23 @@ export class MainChart {
         let best = pts[0];
         for (const p of pts) if (p[1] + 0.2 * p[0] > best[1] + 0.2 * best[0] && Math.abs(p[0]) < 1e6 && Math.abs(p[1]) < 1e6) best = p;
         g.font = "600 10px Segoe UI, sans-serif";
-        g.fillStyle = "#2a2a2a";
+        g.fillStyle = TH.ink;
         g.fillText(label, T.x(best[0]) + 4, T.y(best[1]) - 4);
       } else if (gm.kind === "load") {
         const p = pts[0];
         g.font = "10px Segoe UI, sans-serif";
-        g.fillStyle = "#8a5a00";
+        g.fillStyle = TH.warn;
         g.fillText(label, T.x(p[0]) + 4, T.y(p[1]) + 12);
       }
     }
 
     // linha (Z1)
     if (r.line) {
-      g.strokeStyle = "#222";
+      g.strokeStyle = TH.ink;
       g.lineWidth = 2;
       g.beginPath(); g.moveTo(T.x(0), T.y(0)); g.lineTo(T.x(r.line.r), T.y(r.line.x)); g.stroke();
       g.font = "600 10px Segoe UI, sans-serif";
-      g.fillStyle = "#222";
+      g.fillStyle = TH.ink;
       g.fillText("Z1 linha", T.x(r.line.r) + 4, T.y(r.line.x) + 12);
     }
 
@@ -273,16 +274,16 @@ export class MainChart {
         const st = trajStyle(r.trajectory_style, k);
         const x = T.x(d.r[i]);
         const y = T.y(d.x[i]);
-        g.fillStyle = "#fff";
+        g.fillStyle = TH.surface;
         g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill();
         g.fillStyle = st.color;
         g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill();
-        g.fillStyle = "#2a2a2a";
+        g.fillStyle = TH.ink;
         g.fillText(k, x + 7, y - 6);
       }
     }
     if (this.hover) {
-      g.strokeStyle = "#2a2a2a";
+      g.strokeStyle = TH.ink;
       g.lineWidth = 1.5;
       g.beginPath(); g.arc(T.x(this.hover.x), T.y(this.hover.y), 6, 0, Math.PI * 2); g.stroke();
     }
@@ -291,7 +292,7 @@ export class MainChart {
   _drawTcc(g, T) {
     const r = this.result;
     (r.curves || []).forEach((c, idx) => {
-      const col = ORDINAL[idx % ORDINAL.length];
+      const col = ord(idx);
       g.strokeStyle = col;
       g.lineWidth = 2;
       g.setLineDash(c.quantity === "phase" ? [] : c.quantity === "residual" ? [6, 3] : [2, 3]);
@@ -307,7 +308,7 @@ export class MainChart {
       const lab = c.points[Math.min(c.points.length - 1, Math.floor(c.points.length * 0.15))];
       if (lab) {
         g.font = "600 10px Segoe UI, sans-serif";
-        g.fillStyle = "#2a2a2a";
+        g.fillStyle = TH.ink;
         g.fillText(c.label, T.x(lab[0]) + 4, T.y(Math.min(Math.max(lab[1], 1e-4), 1e4)) - 5);
       }
     });
@@ -317,18 +318,18 @@ export class MainChart {
       g.font = "10px Segoe UI, sans-serif";
       for (const [k, v] of Object.entries(cur)) {
         if (!v) continue;
-        const col = { Ia: PHASE_COLORS.A, Ib: PHASE_COLORS.B, Ic: PHASE_COLORS.C }[k] || NEUTRAL_INK;
+        const col = { Ia: PHASE_COLORS.A, Ib: PHASE_COLORS.B, Ic: PHASE_COLORS.C }[k] || INK.neutral;
         g.strokeStyle = col;
         g.setLineDash([2, 3]);
         g.beginPath(); g.moveTo(T.x(v), T.rect.y); g.lineTo(T.x(v), T.rect.y + T.rect.h); g.stroke();
         g.setLineDash([]);
-        g.fillStyle = "#2a2a2a";
+        g.fillStyle = TH.ink;
         g.fillText(k, T.x(v) + 3, T.rect.y + 12);
       }
     }
     // pontos de operação: tempo pela curva (vazado) e simulado (cheio)
     for (const p of r.points || []) {
-      g.strokeStyle = "#222";
+      g.strokeStyle = TH.ink;
       g.lineWidth = 1.5;
       g.beginPath(); g.arc(T.x(p.i_a), T.y(Math.max(p.t_curve, 1e-4)), 5, 0, Math.PI * 2); g.stroke();
       if (p.t_sim != null) {
@@ -418,7 +419,7 @@ export class SeriesChart {
 
   _draw(g, T) {
     this.series.forEach((s, idx) => {
-      const col = s.phase ? PHASE_COLORS[s.phase] : NEUTRAL_INK;
+      const col = s.phase ? PHASE_COLORS[s.phase] : INK.neutral;
       g.strokeStyle = col;
       g.lineWidth = 1.5;
       g.setLineDash(s.id.startsWith("h5") ? [5, 3] : []);
@@ -436,16 +437,16 @@ export class SeriesChart {
     });
     g.setLineDash([]);
     for (const th of this.thresholds) {
-      g.strokeStyle = "#8a3415";
+      g.strokeStyle = TH.trip;
       g.setLineDash([6, 3]);
       g.beginPath(); g.moveTo(T.rect.x, T.y(th.y)); g.lineTo(T.rect.x + T.rect.w, T.y(th.y)); g.stroke();
       g.setLineDash([]);
-      g.fillStyle = "#8a3415";
+      g.fillStyle = TH.trip;
       g.font = "10px Segoe UI, sans-serif";
       g.fillText(th.label, T.rect.x + 4, T.y(th.y) - 3);
     }
     if (this.cursor != null) {
-      g.strokeStyle = "#4a7ab8";
+      g.strokeStyle = TH.cursor;
       g.beginPath(); g.moveTo(T.x(this.cursor), T.rect.y); g.lineTo(T.x(this.cursor), T.rect.y + T.rect.h); g.stroke();
     }
     // legenda direta
@@ -453,9 +454,9 @@ export class SeriesChart {
     let lx = T.rect.x + T.rect.w - 6;
     g.textAlign = "right";
     [...this.series].reverse().forEach((s) => {
-      const col = s.phase ? PHASE_COLORS[s.phase] : NEUTRAL_INK;
+      const col = s.phase ? PHASE_COLORS[s.phase] : INK.neutral;
       const w = g.measureText(s.label).width;
-      g.fillStyle = "#2a2a2a";
+      g.fillStyle = TH.ink;
       g.fillText(s.label, lx, T.rect.y + 12);
       g.fillStyle = col;
       g.fillRect(lx - w - 14, T.rect.y + 8, 10, 3);

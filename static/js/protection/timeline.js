@@ -4,6 +4,7 @@
  */
 import { formatTime } from "../api.js";
 import { niceTicks } from "../plots/xyplot.js";
+import { T as TH } from "../core/theme.js";
 
 export const LANE_COLORS = {
   pickup: "#d9952b",
@@ -74,11 +75,11 @@ export class Timeline {
 
     // eixo de tempo
     const ticks = niceTicks(t0, t1, Math.max(3, Math.floor((W - LABEL_W) / 90)));
-    g.fillStyle = "#666";
+    g.fillStyle = TH.textMuted;
     g.textAlign = "center";
     for (const t of ticks) {
       const x = this._tToX(t, W);
-      g.strokeStyle = "#ececec";
+      g.strokeStyle = TH.gridLight;
       g.beginPath(); g.moveTo(x, AXIS_H - 4); g.lineTo(x, H); g.stroke();
       g.fillText(formatTime(t), x, 9);
     }
@@ -86,17 +87,17 @@ export class Timeline {
     let y = AXIS_H;
     const drawLane = (lane, sep = false) => {
       if (sep) {
-        g.strokeStyle = "#cfcfcf";
+        g.strokeStyle = TH.gridStrong;
         g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(W, y + 0.5); g.stroke();
-        g.fillStyle = "#666";
+        g.fillStyle = TH.textMuted;
         g.textAlign = "left";
         g.fillText("Canais digitais do registro", 6, y + ROW_H / 2);
         y += ROW_H;
       }
-      g.fillStyle = "#2a2a2a";
+      g.fillStyle = TH.ink;
       g.textAlign = "left";
       g.fillText(clip(lane.label, 28), 6, y + ROW_H / 2);
-      g.fillStyle = "#f3f3f3";
+      g.fillStyle = TH.laneBg;
       g.fillRect(LABEL_W, y + 3, W - LABEL_W - 8, ROW_H - 6);
       const color = LANE_COLORS[lane.kind] || LANE_COLORS.info;
       for (const [a, b] of lane.intervals) {
@@ -108,7 +109,7 @@ export class Timeline {
           // hachura: identidade não depende só da cor
           g.save();
           g.beginPath(); g.rect(x1, y + 3, x2 - x1, ROW_H - 6); g.clip();
-          g.strokeStyle = "rgba(255,255,255,0.7)";
+          g.strokeStyle = TH.laneSep;
           for (let hx = x1 - ROW_H; hx < x2; hx += 5) {
             g.beginPath(); g.moveTo(hx, y + ROW_H); g.lineTo(hx + ROW_H, y); g.stroke();
           }
@@ -122,7 +123,7 @@ export class Timeline {
 
     if (this.cursor != null && this.cursor >= t0 && this.cursor <= t1) {
       const x = this._tToX(this.cursor, W);
-      g.strokeStyle = "#4a7ab8";
+      g.strokeStyle = TH.cursor;
       g.beginPath(); g.moveTo(x + 0.5, AXIS_H - 4); g.lineTo(x + 0.5, H); g.stroke();
     }
   }

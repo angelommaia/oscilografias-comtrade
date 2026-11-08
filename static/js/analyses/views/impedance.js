@@ -2,7 +2,8 @@
 import { escapeHtml, fmtNum } from "../../core/bus.js";
 import { formatTime } from "../../api.js";
 import { XYPlot } from "../../plots/xyplot.js";
-import { LOOP_STYLE, MUTED_INK } from "../colors.js";
+import { INK, LOOP_STYLE } from "../colors.js";
+import { T as TH } from "../../core/theme.js";
 
 const LOOPS = ["AG", "BG", "CG", "AB", "BC", "CA"];
 const UI_KEY = "oscilo.analysis.impedance.ui";
@@ -217,26 +218,26 @@ export default {
         if (!z.on || !(z.reach > 0)) continue;
         const cx = (z.reach / 2) * Math.cos(mta);
         const cy = (z.reach / 2) * Math.sin(mta);
-        g.strokeStyle = MUTED_INK;
+        g.strokeStyle = INK.muted;
         g.lineWidth = 1.2;
         g.setLineDash([]);
         g.beginPath();
         g.arc(T.x(cx), T.y(cy), (z.reach / 2) * T.scale, 0, Math.PI * 2);
         g.stroke();
-        g.fillStyle = MUTED_INK;
+        g.fillStyle = INK.muted;
         g.font = "10px Segoe UI, sans-serif";
         g.fillText(z.label, T.x(z.reach * Math.cos(mta)) + 4, T.y(z.reach * Math.sin(mta)) - 4);
       }
 
       // linha (Z1) e ângulo característico
       if (result.z1) {
-        g.strokeStyle = "#222";
+        g.strokeStyle = TH.ink;
         g.lineWidth = 2;
         g.beginPath();
         g.moveTo(T.x(0), T.y(0));
         g.lineTo(T.x(result.z1.r), T.y(result.z1.x));
         g.stroke();
-        g.fillStyle = "#222";
+        g.fillStyle = TH.ink;
         g.font = "600 10px Segoe UI, sans-serif";
         g.fillText("Z1 linha", T.x(result.z1.r) + 4, T.y(result.z1.x) - 4);
       }
@@ -291,17 +292,17 @@ export default {
           if (i < 0 || Math.abs(d.times[i] - cursorT) > 2 * medianStep(d) + 1e-9) continue;
           const x = T.x(d.r[i]);
           const y = T.y(d.x[i]);
-          g.fillStyle = "#fff";
+          g.fillStyle = TH.surface;
           g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill();
           g.fillStyle = LOOP_STYLE[l].color;
           g.beginPath(); g.arc(x, y, 4.5, 0, Math.PI * 2); g.fill();
-          g.fillStyle = "#2a2a2a";
+          g.fillStyle = TH.ink;
           g.fillText(l, x + 7, y - 6);
         }
       }
 
       if (hover) {
-        g.strokeStyle = "#2a2a2a";
+        g.strokeStyle = TH.ink;
         g.lineWidth = 1.5;
         g.beginPath();
         g.arc(T.x(hover.r), T.y(hover.x), 6, 0, Math.PI * 2);

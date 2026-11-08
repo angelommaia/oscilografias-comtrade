@@ -97,14 +97,21 @@ export class AnalysisDock {
     for (const p of this.panels) {
       const on = p === panel;
       p.tab.classList.toggle("active", on);
-      p.setVisible(on);
+      p.setVisible(on && this.open !== false);
     }
     saveStored("activeTab", panel.view.id);
   }
 
   setOpen(open) {
+    this.open = open;
     this.root.classList.toggle("hidden", !open);
-    if (open) this.active?.setVisible(true);
+    // painel fechado não recalcula nada (economiza CPU em notebooks modestos)
+    this.active?.setVisible(open);
+  }
+
+  activateById(viewId) {
+    const panel = this.panels.find((p) => p.view.id === viewId);
+    if (panel) this.activate(panel);
   }
 
   resize() {

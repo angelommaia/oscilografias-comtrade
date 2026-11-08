@@ -32,12 +32,13 @@ O instalador e a versão portátil não precisam de Python nem de internet, e os
   - correntes máximas e afundamentos de tensão;
   - tempos de partida, trip e abertura do disjuntor, interrupção por polo e religamento;
   - identificação de energização por inrush.
+- **Interface enxuta** para notebooks: menus, painéis de análise sob demanda e tema claro ou escuro.
 - **Relatório** em Word (.docx), HTML ou PDF, com resumo, eventos, medições, figuras e os comentários do analista.
 - **Grupos trifásicos** reconhecidos automaticamente, inclusive por cores (azul/branca/vermelha, como `Vaz`, `Ibr` e `VR`), pelo campo de fase do arquivo ou pela ordem dos canais quando o nome não traz a fase. Uma verificação de rotação aponta fases trocadas (sequência ACB); também é possível montar os grupos manualmente.
 - **Juntar registros** de terminais ou IEDs diferentes numa base de tempo comum. O alinhamento pode ser feito pelo início da perturbação (registros sem sincronismo), pelo trigger ou pelo horário GPS, com ajuste fino manual; o programa também mostra o erro de relógio de cada arquivo. Todas as análises funcionam sobre o registro combinado.
 - **Fasores** estimados por mínimos quadrados, exatos mesmo com número fracionário de amostras por ciclo. Também disponíveis: DFT e variantes com rejeição de DC.
 - **Painel de análises:**
-  - diagrama fasorial com componentes simétricas;
+  - diagrama fasorial com componentes simétricas, inclusive com as duas pontas da linha sobrepostas (registro combinado);
   - plano **R-X** com a trajetória dos 6 laços e compensação k0;
   - **harmônicos** e THD;
   - grandezas no tempo: RMS, P/Q/S e sequências.

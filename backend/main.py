@@ -36,7 +36,7 @@ STATIC_DIR = ROOT / "static"
 
 app = FastAPI(
     title="Oscilografias COMTRADE",
-    version="0.7.0",
+    version="0.8.0",
     docs_url=None if IS_PRODUCTION else "/docs",
     redoc_url=None if IS_PRODUCTION else "/redoc",
     openapi_url=None if IS_PRODUCTION else "/openapi.json",

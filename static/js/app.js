@@ -25,11 +25,12 @@ import {
 import { TimelineRuler } from "./ruler.js";
 import { EventBus } from "./core/bus.js";
 import { AnalysisDock } from "./analyses/index.js";
-import { removeGroup } from "./analyses/api.js";
+import { removeGroup, runAnalysis } from "./analyses/api.js";
 import { openGroupDialog } from "./analyses/groups-dialog.js";
 import { ProtectionView } from "./protection/view.js";
 import { openReportDialog } from "./report.js";
 import { mergeInfoHtml, openMergeDialog } from "./merge.js";
+import { T as TH, getTheme, initTheme, setTheme } from "./core/theme.js";
 import { addGroup } from "./analyses/api.js";
 import {
   drawAnalogWaveform,
@@ -38,10 +39,28 @@ import {
   interpolateValue,
 } from "./waveform.js";
 
+function readPref(key, fallback) {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writePref(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignora */
+  }
+}
+
 const state = {
   record: null,
   selectedChannels: new Set(),
   layout: "stacked",
+  density: readPref("oscilo.density", "compact"),
+  onOpen: readPref("oscilo.onopen", "all"),
   viewStart: 0,
   viewEnd: 1,
   cursorTime: null,
@@ -64,7 +83,7 @@ const state = {
 
 const els = {
   fileInput: document.getElementById("file-input"),
-  sampleSelect: document.getElementById("sample-select"),
+  sampleList: document.getElementById("sample-list"),
   analogList: document.getElementById("analog-channels"),
   digitalList: document.getElementById("digital-channels"),
   analogSearch: document.getElementById("analog-search"),
@@ -93,7 +112,6 @@ const els = {
   removeGroupBtn: document.getElementById("remove-group"),
   noGroupsHint: document.getElementById("no-groups-hint"),
   rotationHint: document.getElementById("rotation-hint"),
-  toggleDock: document.getElementById("toggle-dock"),
   dock: document.getElementById("analysis-dock"),
   groupDialog: document.getElementById("group-dialog"),
 };
@@ -157,6 +175,17 @@ const analysisCtx = {
   openReport() {
     openReportDialog(analysisCtx);
   },
+  /** Executa fn com o tema claro (figuras do relatório sempre claras). */
+  withLightTheme(fn) {
+    const prev = getTheme();
+    if (prev === "light") return fn();
+    setTheme("light", { persist: false });
+    try {
+      return fn();
+    } finally {
+      setTheme(prev, { persist: false });
+    }
+  },
   /** Move o cursor (ex.: clique num ponto da trajetória de impedância). */
   setCursor(time) {
     setCursorTime(time, { reveal: true });
@@ -193,10 +222,32 @@ const ruler = new TimelineRuler(els.rulerCanvas, (event) => {
   }
 });
 
+function bindTheme() {
+  const btn = document.getElementById("theme-toggle");
+  const sync = () => {
+    const dark = getTheme() === "dark";
+    btn.textContent = dark ? "☀" : "☾";
+    btn.title = dark ? "Tema claro" : "Tema escuro";
+  };
+  window.addEventListener("oscilo-theme", () => {
+    sync();
+    redrawAllCanvases();
+    ruler.draw();
+    dock.active?.instance?.resize?.();
+    if (document.body.classList.contains("mode-prot")) protectionView.setVisible(true);
+  });
+  btn.addEventListener("click", () => setTheme(getTheme() === "dark" ? "light" : "dark"));
+  initTheme();
+  sync();
+}
+
 function init() {
+  bindTheme();
   appendFixedCursorLines(els.rulerCanvas.parentElement);
   bindSideTabs();
   bindPhasorPanel();
+  bindMenus();
+  bindSidebarToggle();
   bindToolbar();
   bindDesktop();
   bindDock();
@@ -205,7 +256,7 @@ function init() {
     refreshView();
     dock.resize();
   }, 150));
-  dock.init();
+  dock.init().then(renderAnalysesMenu);
   protectionView.init();
   bindModeTabs();
 }
@@ -304,39 +355,60 @@ function bindModeTabs() {
   if (saved === "prot") setMode("prot");
 }
 
+// ---------------------------------------------------------------------------
+// Painel de análises sob demanda (fechado por padrão; abre pelo menu Análises)
+// ---------------------------------------------------------------------------
+function setDockOpen(open) {
+  dock.setOpen(open);
+  els.dock.classList.toggle("hidden", !open);
+  writePref("oscilo.dock.open", open ? "1" : "0");
+  refreshView();
+  dock.resize();
+}
+
+function openAnalysis(viewId) {
+  dock.activateById(viewId);
+  setDockOpen(true);
+}
+
+function renderAnalysesMenu() {
+  const list = document.getElementById("analyses-list");
+  list.innerHTML = dock.panels
+    .map((p) => `<button type="button" class="menu-item" data-view="${escapeHtml(p.view.id)}" title="${escapeHtml(p.schema.description || "")}">${escapeHtml(p.view.title)}</button>`)
+    .join("") + '<div class="menu-sep"></div><button type="button" class="menu-item" data-view="__close">Fechar painel</button>';
+  list.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-view]");
+    if (!b) return;
+    if (b.dataset.view === "__close") setDockOpen(false);
+    else openAnalysis(b.dataset.view);
+  });
+}
+
 function bindDock() {
-  let open = true;
   try {
-    open = localStorage.getItem("oscilo.dock.open") !== "0";
     const w = Number(localStorage.getItem("oscilo.dock.width"));
     if (w > 0) els.dock.style.width = `${w}px`;
   } catch {
     /* ignora */
   }
-  const apply = () => {
-    dock.setOpen(open);
-    els.toggleDock.classList.toggle("active", open);
-    refreshView();
-  };
-  els.toggleDock.addEventListener("click", () => {
-    open = !open;
-    try {
-      localStorage.setItem("oscilo.dock.open", open ? "1" : "0");
-    } catch {
-      /* ignora */
-    }
-    apply();
-  });
+  const open = readPref("oscilo.dock.open", "0") === "1";
   dock.setOpen(open);
-  els.toggleDock.classList.toggle("active", open);
+  els.dock.classList.toggle("hidden", !open);
+  document.getElementById("dock-close").addEventListener("click", () => setDockOpen(false));
+  document.getElementById("dock-expand").addEventListener("click", () => {
+    els.dock.classList.toggle("expanded");
+    refreshView();
+    dock.resize();
+  });
 
   const resizer = els.dock.querySelector(".dock-resizer");
   resizer.addEventListener("mousedown", (e) => {
     e.preventDefault();
+    els.dock.classList.remove("expanded");
     const startX = e.clientX;
     const startW = els.dock.getBoundingClientRect().width;
     const onMove = (ev) => {
-      const w = Math.min(Math.max(startW + (startX - ev.clientX), 300), window.innerWidth * 0.6);
+      const w = Math.min(Math.max(startW + (startX - ev.clientX), 280), window.innerWidth * 0.7);
       els.dock.style.width = `${w}px`;
       dock.resize();
     };
@@ -352,6 +424,65 @@ function bindDock() {
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Menus suspensos da barra (Arquivo, Exibir, Análises)
+// ---------------------------------------------------------------------------
+function closeMenus(except = null) {
+  document.querySelectorAll(".menu.open").forEach((m) => {
+    if (m !== except) m.classList.remove("open");
+  });
+}
+
+function bindMenus() {
+  document.querySelectorAll(".menu").forEach((menu) => {
+    menu.querySelector(".menu-btn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      const willOpen = !menu.classList.contains("open");
+      closeMenus(menu);
+      menu.classList.toggle("open", willOpen);
+    });
+    menu.querySelector(".menu-pop").addEventListener("click", (e) => {
+      // botões fecham o menu; opções (rádio) deixam aberto para comparar
+      if (e.target.closest("button.menu-item, label.file-btn")) closeMenus();
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".menu")) closeMenus();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeMenus();
+  });
+
+  const setRadio = (name, value) => {
+    const el = document.querySelector(`input[name="${name}"][value="${value}"]`);
+    if (el) el.checked = true;
+  };
+  setRadio("density", state.density);
+  setRadio("onopen", state.onOpen);
+  document.querySelectorAll('input[name="density"]').forEach((input) => input.addEventListener("change", () => {
+    state.density = input.value;
+    writePref("oscilo.density", state.density);
+    refreshView();
+  }));
+  document.querySelectorAll('input[name="onopen"]').forEach((input) => input.addEventListener("change", () => {
+    state.onOpen = input.value;
+    writePref("oscilo.onopen", state.onOpen);
+  }));
+}
+
+function bindSidebarToggle() {
+  const apply = (hidden) => {
+    document.body.classList.toggle("sidebar-hidden", hidden);
+    writePref("oscilo.sidebar.hidden", hidden ? "1" : "0");
+    refreshView();
+    dock.resize();
+  };
+  document.body.classList.toggle("sidebar-hidden", readPref("oscilo.sidebar.hidden", "0") === "1");
+  document.getElementById("toggle-sidebar").addEventListener("click", () => {
+    apply(!document.body.classList.contains("sidebar-hidden"));
   });
 }
 
@@ -371,7 +502,10 @@ function setCursorTime(time, { reveal = false } = {}) {
 
 function bindToolbar() {
   els.fileInput.addEventListener("change", onFileSelected);
-  els.sampleSelect.addEventListener("change", onSampleSelected);
+  els.sampleList.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-sample]");
+    if (b) onSampleSelected(b.dataset.sample);
+  });
 
   document.getElementById("zoom-in").addEventListener("click", () => zoomBy(0.5));
   document.getElementById("zoom-out").addEventListener("click", () => zoomBy(2));
@@ -389,8 +523,9 @@ function bindToolbar() {
     if (state.cursorTime != null) addMarker(state.cursorTime);
   });
   document.getElementById("clear-markers").addEventListener("click", clearMarkers);
-  document.getElementById("select-all-analog").addEventListener("click", selectDefaultAnalog);
+  document.getElementById("show-all").addEventListener("click", () => selectChannels("all"));
   document.getElementById("clear-selection").addEventListener("click", clearChannelSelection);
+  document.querySelectorAll(".list-actions [data-check]").forEach((b) => b.addEventListener("click", () => checkListed(b.dataset.check, b.dataset.on === "1")));
 
   els.analogSearch.addEventListener("input", () => {
     state.analogFilter = els.analogSearch.value.trim().toLowerCase();
@@ -484,36 +619,18 @@ function bindToolbar() {
 }
 
 async function loadSampleList() {
-  els.sampleSelect.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
   try {
     const { samples } = await listSamples();
-    if (!samples.length) {
-      const opt = document.createElement("option");
-      opt.value = "";
-      opt.textContent = "Nenhum exemplo encontrado";
-      opt.disabled = true;
-      els.sampleSelect.appendChild(opt);
-      return;
-    }
-    for (const sample of samples) {
-      const opt = document.createElement("option");
-      opt.value = sample.id;
-      const label = sample.folder ? `${sample.folder} / ${sample.name}` : sample.name;
-      opt.textContent = label;
-      els.sampleSelect.appendChild(opt);
-    }
+    els.sampleList.innerHTML = samples.length
+      ? samples.map((sample) => `<button type="button" class="menu-item" data-sample="${escapeHtml(sample.id)}">${escapeHtml(sample.folder || sample.name)}</button>`).join("")
+      : '<span class="menu-note">Nenhum exemplo encontrado</span>';
   } catch (err) {
     console.warn("Não foi possível listar exemplos:", err);
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "Erro ao carregar exemplos";
-    opt.disabled = true;
-    els.sampleSelect.appendChild(opt);
+    els.sampleList.innerHTML = '<span class="menu-note">Erro ao carregar exemplos</span>';
   }
 }
 
-async function onSampleSelected() {
-  const sampleId = els.sampleSelect.value;
+async function onSampleSelected(sampleId) {
   if (!sampleId) return;
   setLoading("Carregando exemplo…");
   try {
@@ -572,12 +689,11 @@ function pushRecent(path) {
 }
 
 function renderRecent() {
-  const sel = document.getElementById("recent-select");
   const list = readRecent();
-  sel.innerHTML = '<option value="">Recentes…</option>' + list
-    .map((p) => `<option value="${escapeHtml(p)}" title="${escapeHtml(p)}">${escapeHtml(p.split(/[\\/]/).slice(-2).join(" / "))}</option>`)
+  document.getElementById("recent-list").innerHTML = list
+    .map((p) => `<button type="button" class="menu-item" data-recent="${escapeHtml(p)}" title="${escapeHtml(p)}">${escapeHtml(p.split(/[\\/]/).slice(-2).join(" / "))}</button>`)
     .join("");
-  sel.classList.toggle("hidden", !list.length);
+  document.getElementById("recent-block").classList.toggle("hidden", !list.length);
 }
 
 async function openLocalPath(path) {
@@ -601,7 +717,7 @@ function bindDesktop() {
   const btn = document.getElementById("open-native");
   btn.classList.remove("hidden");
   // o upload pelo navegador continua disponível como alternativa
-  document.querySelector(".file-btn").classList.add("hidden");
+  document.querySelector("#menu-file .file-btn").classList.add("hidden");
   btn.addEventListener("click", async () => {
     try {
       const path = await pickComtradeFile();
@@ -611,11 +727,9 @@ function bindDesktop() {
       els.fileInput.click(); // alternativa: upload
     }
   });
-  const recent = document.getElementById("recent-select");
-  recent.addEventListener("change", () => {
-    const p = recent.value;
-    recent.value = "";
-    if (p) openLocalPath(p);
+  document.getElementById("recent-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-recent]");
+    if (b) openLocalPath(b.dataset.recent);
   });
   window.addEventListener("keydown", (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "o") {
@@ -680,7 +794,7 @@ function setRecord(record, sourceName = "", { keep = false } = {}) {
     refreshView();
     bus.emit("channels");
   } else {
-    selectDefaultAnalog();
+    selectChannels(state.onOpen);
   }
 }
 
@@ -904,6 +1018,59 @@ function selectDefaultAnalog() {
   bus.emit("channels");
 }
 
+/** "all": todos os canais; "changing": analógicos + digitais que mudam; "analog": seleção padrão. */
+async function selectChannels(mode) {
+  if (!state.record) return;
+  if (mode === "analog") {
+    selectDefaultAnalog();
+    return;
+  }
+  state.selectedChannels.clear();
+  state.record.analog_channels.forEach((c) => state.selectedChannels.add(c.index));
+  if (mode === "all") {
+    state.record.digital_channels.forEach((c) => state.selectedChannels.add(c.index));
+  } else {
+    (await changingDigitals()).forEach((i) => state.selectedChannels.add(i));
+  }
+  syncChannelCheckboxes();
+  refreshView();
+  bus.emit("channels");
+}
+
+/** Índices dos digitais que mudam de estado (consulta a sequência de eventos). */
+async function changingDigitals() {
+  const rec = state.record;
+  if (!rec) return [];
+  if (rec._changing) return rec._changing;
+  try {
+    const res = await runAnalysis(rec.id, "events", { params: { scope: "all" } });
+    rec._changing = res.channels.filter((c) => c.changes > 0).map((c) => c.index);
+  } catch {
+    rec._changing = [];
+  }
+  return rec._changing;
+}
+
+/** Marca/desmarca os canais que aparecem na lista (respeita a busca). */
+async function checkListed(kind, on) {
+  if (!state.record) return;
+  if (kind === "changing") {
+    state.record.digital_channels.forEach((c) => state.selectedChannels.delete(c.index));
+    (await changingDigitals()).forEach((i) => state.selectedChannels.add(i));
+  } else {
+    const list = kind === "analog" ? els.analogList : els.digitalList;
+    list.querySelectorAll(".channel-item").forEach((item) => {
+      if (item.style.display === "none") return;
+      const idx = Number(item.dataset.index);
+      if (on) state.selectedChannels.add(idx);
+      else state.selectedChannels.delete(idx);
+    });
+  }
+  syncChannelCheckboxes();
+  refreshView();
+  bus.emit("channels");
+}
+
 function clearChannelSelection() {
   state.selectedChannels.clear();
   syncChannelCheckboxes();
@@ -922,7 +1089,7 @@ function computeMaxPoints() {
   const startSample = timeToSample(state.viewStart);
   const endSample = timeToSample(state.viewEnd) + 1;
   const samplesInView = Math.max(1, endSample - startSample);
-  return Math.min(Math.max(width * 2, 2000), samplesInView, 20000);
+  return Math.min(Math.max(width * 2, 1200), samplesInView, 8000);
 }
 
 function applyViewChrome() {
@@ -1036,6 +1203,20 @@ function renderTracks() {
   }
 }
 
+/** Altura das faixas: compactas cabem em notebooks; com poucos analógicos, eles
+ * dividem a altura disponível. */
+function trackHeight(ch) {
+  const compact = state.density === "compact";
+  if (ch.kind === "digital") return compact ? 22 : 40;
+  const chans = state.waveformCache?.channels || [];
+  const nAnalog = chans.filter((c) => c.kind !== "digital").length || 1;
+  const nDigital = chans.length - nAnalog;
+  const avail = els.tracksContainer.clientHeight - nDigital * (compact ? 23 : 41) - 4;
+  const fill = Math.floor(avail / nAnalog) - 1;
+  const [lo, hi] = compact ? [64, 160] : [110, 220];
+  return Math.max(lo, Math.min(hi, fill));
+}
+
 function renderStackedTrack(ch) {
   const row = document.createElement("div");
   row.className = "track-row";
@@ -1044,16 +1225,19 @@ function renderStackedTrack(ch) {
 
   const gutter = document.createElement("div");
   gutter.className = "track-gutter-panel";
-  const metaLabel = ch.kind === "derived" ? "calculado" : ch.kind === "digital" ? "digital" : escapeHtml(ch.unit || "analógico");
-  gutter.innerHTML = `
-    <div class="name">${escapeHtml(ch.name)}</div>
-    <div class="meta">${metaLabel}</div>
-    ${instantValueHtml(ch.index)}
-  `;
+  const metaLabel = ch.kind === "derived" ? "calculado" : ch.kind === "digital" ? "" : escapeHtml(ch.unit || "");
+  if (ch.kind === "digital") {
+    gutter.classList.add("digital");
+    gutter.innerHTML = `<div class="name" title="${escapeHtml(ch.name)}">${escapeHtml(ch.name)}</div>${instantValueHtml(ch.index)}`;
+  } else {
+    gutter.innerHTML = `
+      <div class="name" title="${escapeHtml(ch.name)}">${escapeHtml(ch.name)}</div>
+      <div class="meta"><span>${metaLabel}</span>${instantValueHtml(ch.index)}</div>`;
+  }
 
   const wrap = document.createElement("div");
   wrap.className = "track-canvas-wrap";
-  wrap.style.height = ch.kind === "digital" ? "72px" : "110px";
+  wrap.style.height = `${trackHeight(ch)}px`;
 
   const canvas = document.createElement("canvas");
   canvas.dataset.channelIndex = String(ch.index);
@@ -1098,18 +1282,15 @@ function createOverlayRow(title, channels, small, channelMeta = null) {
   const gutter = document.createElement("div");
   gutter.className = "track-gutter-panel";
   if (channelMeta) {
-    gutter.innerHTML = `
-      <div class="name">${escapeHtml(title)}</div>
-      <div class="meta">digital</div>
-      ${instantValueHtml(channelMeta.index)}
-    `;
+    gutter.classList.add("digital");
+    gutter.innerHTML = `<div class="name" title="${escapeHtml(title)}">${escapeHtml(title)}</div>${instantValueHtml(channelMeta.index)}`;
   } else {
     gutter.innerHTML = `<div class="name">${escapeHtml(title)}</div>`;
   }
 
   const wrap = document.createElement("div");
   wrap.className = "track-canvas-wrap";
-  wrap.style.height = small ? "72px" : "240px";
+  wrap.style.height = small ? `${state.density === "compact" ? 22 : 40}px` : `${Math.max(200, els.tracksContainer.clientHeight * 0.55)}px`;
 
   const canvas = document.createElement("canvas");
   if (channelMeta) canvas.dataset.channelIndex = String(channelMeta.index);
@@ -1155,7 +1336,7 @@ function redrawAllCanvases() {
         values: ch.values,
         yMin: yRange(ch)[0],
         yMax: yRange(ch)[1],
-        color: palette[i % palette.length],
+        color: TH.palette[i % TH.palette.length],
       })),
       { viewStart: state.viewStart, viewEnd: state.viewEnd }
     );
@@ -1189,7 +1370,7 @@ function drawChannelCanvas(canvas, ch) {
     unit: ch.unit,
     yMin,
     yMax,
-    color: ch.kind === "derived" ? "#6a4a8a" : undefined,
+    color: ch.kind === "derived" ? TH.derived : undefined,
   };
 
   if (ch.kind === "digital") {
@@ -1314,6 +1495,20 @@ const fetchExactInstantValues = debounce(async () => {
   }
 }, 80);
 
+/** Digitais chegam só com as transições: valor = último ponto com t ≤ cursor. */
+function stepValue(times, values, time) {
+  if (!times.length) return null;
+  let lo = 0;
+  let hi = times.length - 1;
+  if (time < times[0]) return values[0];
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (times[mid] <= time) lo = mid;
+    else hi = mid - 1;
+  }
+  return values[lo];
+}
+
 function updateInstantValues() {
   if (state.cursorTime == null || !state.waveformCache) {
     document.querySelectorAll(".instant-value").forEach(clearInstantValue);
@@ -1327,7 +1522,9 @@ function updateInstantValues() {
       clearInstantValue(el);
       return;
     }
-    const value = interpolateValue(ch.times, ch.values, state.cursorTime);
+    const value = ch.kind === "digital"
+      ? stepValue(ch.times, ch.values, state.cursorTime)
+      : interpolateValue(ch.times, ch.values, state.cursorTime);
     const kind = ch.kind === "derived" ? "analog" : ch.kind;
     setInstantValue(el, value, ch.unit, kind, state.cursorTime);
   });
@@ -1668,6 +1865,5 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
-const palette = ["#3a6ea5", "#8a5a3a", "#5a8a5a", "#7a3a7a", "#3a7a7a", "#a05a3a"];
 
 init();

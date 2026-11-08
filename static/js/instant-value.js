@@ -1,58 +1,31 @@
-const INSTANT_DECIMALS = 4;
-const INSTANT_INT_WIDTH = 8;
+/** Valor do canal no cursor, ao lado do nome da faixa (formato compacto pt-BR). */
 
-export function formatDecimalBR(value, decimals = INSTANT_DECIMALS, intWidth = INSTANT_INT_WIDTH) {
+export function formatDecimalBR(value, decimals = 4) {
   if (value == null || Number.isNaN(value)) return null;
-  const sign = value < 0 ? "-" : "";
   const abs = Math.abs(value);
-  const [intPart, fracPart = ""] = abs.toFixed(decimals).split(".");
-  const paddedInt = intPart.padStart(intWidth, "\u00a0");
-  return `${sign}${paddedInt},${fracPart}`;
-}
-
-export function formatInstantParts(value, unit, kind, timeS) {
-  if (value == null || Number.isNaN(value) || timeS == null || Number.isNaN(timeS)) {
-    return { x: "—", y: "—" };
-  }
-
-  let xNum;
-  if (kind === "digital") {
-    const digit = value >= 0.5 ? "1" : "0";
-    xNum = digit.padStart(INSTANT_INT_WIDTH, "\u00a0") + ",0000";
-  } else {
-    xNum = formatDecimalBR(value);
-  }
-
-  const x = kind === "digital" ? xNum : `${xNum} ${unit || ""}`.trimEnd();
-  const y = `${formatDecimalBR(timeS)} s`;
-  return { x, y };
+  const d = abs >= 10000 ? 1 : abs >= 1000 ? 2 : abs >= 100 ? 3 : decimals;
+  return value.toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
 }
 
 export function instantValueHtml(index) {
-  return `
-    <div class="instant-value" data-instant="${index}">
-      <div class="instant-row">
-        <span class="instant-label">X:</span>
-        <span class="instant-num instant-x">—</span>
-      </div>
-      <div class="instant-row">
-        <span class="instant-label">Y:</span>
-        <span class="instant-num instant-y">—</span>
-      </div>
-    </div>
-  `;
+  return `<span class="instant-value" data-instant="${index}">—</span>`;
 }
 
-export function setInstantValue(el, value, unit, kind, timeS) {
-  const xEl = el.querySelector(".instant-x");
-  const yEl = el.querySelector(".instant-y");
-  if (!xEl || !yEl) return;
-
-  const parts = formatInstantParts(value, unit, kind, timeS);
-  xEl.textContent = parts.x;
-  yEl.textContent = parts.y;
+export function setInstantValue(el, value, unit, kind) {
+  if (value == null || Number.isNaN(value)) {
+    el.textContent = "—";
+    el.classList.remove("on");
+    return;
+  }
+  if (kind === "digital") {
+    const on = value >= 0.5;
+    el.textContent = on ? "1" : "0";
+    el.classList.toggle("on", on);
+    return;
+  }
+  el.textContent = `${formatDecimalBR(value)}${unit ? ` ${unit}` : ""}`;
 }
 
 export function clearInstantValue(el) {
-  setInstantValue(el, null, "", "analog", null);
+  setInstantValue(el, null, "", "analog");
 }

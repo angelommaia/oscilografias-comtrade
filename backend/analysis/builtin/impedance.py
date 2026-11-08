@@ -101,6 +101,15 @@ class ImpedanceDiagram(Analysis):
             return loop_impedances(ctx, vg["id"], ig["id"], a, b, wc, est, k0, i_min, ratio, st)
 
         zs = compute(i0, i1, step)
+        if not any(np.isfinite(z).any() for z in zs.values()):
+            ia, ib, ic = ctx.group_phasors(ig["id"], "I", i0, i1, wc, est, step)
+            mags = np.abs(np.concatenate([ia, ib, ic]))
+            i_max = float(np.nanmax(mags)) if np.isfinite(mags).any() else 0.0
+            raise ValueError(
+                f"Sem pontos para plotar: a corrente ficou abaixo do mínimo ({i_min:.3g} A) em todo o trecho "
+                f"(máxima medida: {i_max:.3g} A). Normalmente isso indica linha aberta/desenergizada neste "
+                "registro – não há impedância aparente a calcular. Se a corrente for mesmo baixa, reduza "
+                "\"Corrente mínima\" em Parâmetros.")
         times = ctx.time[i0 : i1 + 1 : step]
         sel = decimate_indices(len(times), max_pts)
         loops_out: dict[str, Any] = {}

@@ -15,6 +15,13 @@ import sys
 import threading
 import time
 
+_T0 = time.perf_counter()
+
+
+def _stage(msg: str) -> None:
+    """Etapa da inicialização no server.log (a tela de abertura mostra a última)."""
+    print(f"[oscilo {time.perf_counter() - _T0:6.1f} s] {msg}", flush=True)
+
 
 def _watch_parent(pid: int) -> None:
     """Encerra o servidor quando o processo da janela termina."""
@@ -38,6 +45,7 @@ def _watch_parent(pid: int) -> None:
 
 
 def main() -> None:
+    _stage("Processo iniciado")
     parser = argparse.ArgumentParser(description="Servidor local do Oscilo")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--token", required=True)
@@ -50,9 +58,16 @@ def main() -> None:
     os.environ.setdefault("ENV", "development")
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    _stage("Carregando o servidor web…")
     import uvicorn
 
+    _stage("Carregando as bibliotecas de cálculo (numpy)…")
+    import numpy  # noqa: F401  (a primeira importação é a mais lenta)
+
+    _stage("Carregando as análises…")
     from main import app
+
+    _stage(f"Abrindo a porta {args.port}…")
 
     threading.Thread(target=_watch_parent, args=(args.parent_pid,), daemon=True).start()
     uvicorn.run(

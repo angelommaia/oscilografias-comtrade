@@ -61,15 +61,17 @@ Guia completo: **[DEPLOY.md](../DEPLOY.md)** (GitHub + Railway passo a passo).
 
 ## Uso
 
-1. **Abrir arquivo**: clique em "Abrir COMTRADE" e selecione o `.cfg` (e o `.dat`).
-2. **Exemplos**: escolha uma oscilografia no menu suspenso (se houver arquivos em `samples/`).
-3. **Canais**: marque/desmarque analógicos e digitais na barra lateral.
-4. **Fasores**: selecione grupos de tensão/corrente (ou crie um com "+ Grupo trifásico"), janela e estimador.
-5. **Análises**: posicione o cursor (Fasores) ou arraste na régua para selecionar um intervalo (Impedância/Harmônicos). `Esc` limpa a seleção. Cada aba tem "Parâmetros" (salvos no navegador).
-6. **Cursores C1/C2**: com o mouse sobre a oscilografia, tecle `1` ou `2` (ou use os botões C1/C2); arraste as linhas para ajustar. A aba **Cursores** mostra valores em cada um, Δt e estatísticas do trecho.
-7. **Eventos e Resumo**: a aba **Eventos** lista as mudanças dos canais digitais; a aba **Resumo** caracteriza a perturbação (início, tipo, máximos, tempos de proteção). Clique num instante para levar o cursor até ele.
-8. **Juntar registros**: botão "Juntar registros" – marque 2 a 6 oscilografias abertas (ou adicione arquivos no próprio diálogo), escolha o alinhamento (início da perturbação, trigger ou horário GPS) e, se preciso, um ajuste em ms por registro. Os canais ganham o rótulo do terminal ("TERMINAL_A: Ia…"). "Ajustar alinhamento…" na barra lateral refaz a junção mantendo os canais exibidos.
-9. **Relatório**: botão "Relatório" (ou "Gerar relatório…" no Resumo) gera DOCX, HTML ou PDF (impressão) com resumo, eventos, cursores, figuras e o texto do analista.
+1. **Abrir**: menu **Arquivo → Abrir COMTRADE…** (no navegador, selecione o `.cfg` e o `.dat` juntos; no desktop, **Abrir…**/Ctrl+O e só o `.cfg`). Exemplos e Recentes ficam no mesmo menu.
+2. **Canais**: ao abrir, todos os canais são exibidos (mude em **Exibir → Ao abrir um registro**). **Limpar tela** desmarca tudo; **Todos os canais** volta a mostrar tudo. Na barra lateral (abas Analógicos | Digitais | Fasores), a busca filtra a lista e "Marcar/Desmarcar listados" age só nos canais filtrados; "Só os que mudam" marca os digitais com transição. ☰ recolhe a barra lateral.
+3. **Exibir**: uma faixa por canal ou analógicos sobrepostos; faixas compactas (padrão, cabem em notebooks) ou altas; marcadores.
+4. **Fasores**: na aba Fasores da barra lateral, selecione grupos de tensão/corrente (ou crie um com "+ Grupo trifásico"), janela e estimador.
+5. **Análises**: o painel da direita abre só quando pedido, pelo menu **Análises** (Resumo, Eventos, Cursores, Fasores, Impedância, Harmônicos); ⤢ amplia e × fecha. Painel fechado não calcula nada. Posicione o cursor (Fasores) ou arraste na régua para selecionar um intervalo (Impedância/Harmônicos). `Esc` limpa a seleção.
+6. **Cursores C1/C2**: com o mouse sobre a oscilografia, tecle `1` ou `2` (ou use os botões C1/C2); arraste as linhas para ajustar. A análise **Cursores** mostra valores em cada um, Δt e estatísticas do trecho.
+7. **Eventos e Resumo**: **Eventos** lista as mudanças dos canais digitais; **Resumo** caracteriza a perturbação (início, tipo, máximos, tempos de proteção). Clique num instante para levar o cursor até ele.
+8. **Juntar registros**: **Arquivo → Juntar registros…** – marque 2 a 6 oscilografias abertas (ou adicione arquivos no próprio diálogo), escolha o alinhamento (início da perturbação, trigger ou horário GPS) e, se preciso, um ajuste em ms por registro. Os canais ganham o rótulo do terminal ("TERMINAL_A: Ia…"). "Ajustar alinhamento…" na barra lateral refaz a junção mantendo os canais exibidos.
+9. **Fasores de duas pontas**: na análise Fasores, marque **2º terminal** e escolha os grupos V/I da outra ponta (num registro combinado o programa já sugere os do outro terminal). Os fasores da 2ª ponta aparecem com ′, traço fino e ponta vazada; a tabela mostra razão de módulo e Δ ângulo entre as pontas. Se o alinhamento não for por GPS, cada 1 ms de erro vale 21,6° (60 Hz).
+10. **Tema**: botão ☾/☀ na barra alterna claro/escuro (as figuras do relatório saem sempre no tema claro).
+11. **Relatório**: **Arquivo → Relatório…** (ou "Gerar relatório…" no Resumo) gera DOCX, HTML ou PDF (impressão) com resumo, eventos, cursores, figuras e o texto do analista.
 
 ## Modo Proteção
 

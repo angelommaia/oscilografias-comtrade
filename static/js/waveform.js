@@ -1,5 +1,7 @@
+import { T as TH } from "./core/theme.js";
+
 export function drawAnalogWaveform(canvas, times, values, options = {}) {
-  const { color = "#3a6ea5", yMin, yMax, viewStart, viewEnd, unit = "" } = options;
+  const { color = TH.waveAnalog, yMin, yMax, viewStart, viewEnd, unit = "" } = options;
   const ctx = setupCanvas(canvas);
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -78,7 +80,7 @@ export function drawAnalogWaveform(canvas, times, values, options = {}) {
 }
 
 export function drawDigitalWaveform(canvas, times, values, options = {}) {
-  const { color = "#5a8a5a", viewStart, viewEnd } = options;
+  const { color = TH.waveDigital, viewStart, viewEnd } = options;
   const ctx = setupCanvas(canvas);
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -144,7 +146,7 @@ export function drawOverlayAnalog(canvas, seriesList, options = {}) {
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
 
-  const palette = ["#3a6ea5", "#8a5a3a", "#5a8a5a", "#7a3a7a", "#3a7a7a", "#a05a3a"];
+  const palette = TH.palette;
 
   seriesList.forEach((series, idx) => {
     const values = series.values;
@@ -189,7 +191,7 @@ function setupCanvas(canvas) {
 }
 
 function drawGrid(ctx, w, h, light = false) {
-  ctx.strokeStyle = light ? "#ececec" : "#e4e4e4";
+  ctx.strokeStyle = light ? TH.gridLight : TH.grid;
   ctx.lineWidth = 1;
   const rows = 4;
   for (let i = 1; i < rows; i += 1) {
@@ -201,7 +203,7 @@ function drawGrid(ctx, w, h, light = false) {
   }
 
   if (light) {
-    ctx.strokeStyle = "#ddd";
+    ctx.strokeStyle = TH.gridStrong;
     ctx.beginPath();
     ctx.moveTo(0, h / 2);
     ctx.lineTo(w, h / 2);
@@ -210,7 +212,7 @@ function drawGrid(ctx, w, h, light = false) {
 }
 
 function drawAxisLabels(ctx, w, h, lo, hi, unit) {
-  ctx.fillStyle = "#888";
+  ctx.fillStyle = TH.axis;
   ctx.font = "10px Segoe UI, sans-serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "middle";

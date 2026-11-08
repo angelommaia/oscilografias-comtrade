@@ -145,3 +145,23 @@ def test_merge_alignment(tmp_path):
 
     with pytest.raises(ValueError):
         merge_records(store, [{"id": meta.id}, {"id": ma.id}], "onset")
+
+
+def test_phasor_two_terminals(tmp_path):
+    t_a = datetime(2024, 5, 1, 10, 0, 0)
+    a = write_record(tmp_path / "a", "A", COLORS, t_a)
+    b = write_record(tmp_path / "b", "B", COLORS, t_a)
+    store = ComtradeStore()
+    ma, mb = store.load_from_path(a), store.load_from_path(b)
+    meta = merge_records(store, [{"id": ma.id, "label": "A"}, {"id": mb.id, "label": "B"}], "absolute", ma.id)
+    ctx = store.context(meta.id)
+    gid = {g["id"].split("|")[0] + g["quantity"]: g["id"] for g in ctx.data.groups}
+    res = get_analysis("phasor_diagram").run(ctx, AnalysisRequest(
+        time_s=0.2, voltage_group=gid["AV"], current_group=gid["AI"], inputs={"v2": gid["BV"], "i2": gid["BI"]}))
+    assert res["terminals"] == {"1": "A", "2": "B"}
+    second = [p for p in res["phasors"] if p["terminal"] == 2]
+    assert {p["label"] for p in second} == {"Va′", "Vb′", "Vc′", "Ia′", "Ib′", "Ic′"}
+    diffs = {d["label"]: d for d in res["extras"]["diffs"]}
+    assert diffs["Va′ − Va"]["ratio"] == pytest.approx(1, abs=1e-3)
+    assert diffs["Va′ − Va"]["dang"] == pytest.approx(0, abs=0.1)
+    assert res["notes"] == []  # alinhado por horário (GPS)

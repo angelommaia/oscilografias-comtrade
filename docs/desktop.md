@@ -25,13 +25,20 @@ Na página **Releases** do repositório:
 - **Web:** `Oscilo_x.y.z_web.zip`. Roda no navegador com Python 3.10+. Extraia e execute `iniciar.bat` (Windows) ou `./iniciar.sh` (Linux/macOS). Veja o `LEIA-ME.txt` do pacote.
 - **Linux e macOS:** `.AppImage` (portátil), `.deb` e `.dmg` (Apple Silicon).
 
+### Notebooks corporativos
+
+- Na primeira execução o antivírus da empresa costuma verificar todos os arquivos do servidor embutido (pasta `server\`), e isso pode levar alguns minutos. A tela de abertura mostra o tempo e a etapa atual e **continua esperando** enquanto o servidor estiver vivo; não feche a janela. As execuções seguintes são rápidas.
+- Prefira o **instalador** (instala em `%LOCALAPPDATA%\Programs`, pasta local). No portátil, extraia o zip inteiro numa pasta **local** (ex.: `C:\Users\<você>\Oscilo`), não em pasta de rede, OneDrive ou dentro do próprio zip.
+- Se mesmo assim não abrir, o arquivo `%LOCALAPPDATA%\io.github.angelommaia.oscilo\logs\server.log` mostra a última etapa que o servidor alcançou (ex.: "Carregando as bibliotecas de cálculo (numpy)…"). Envie esse arquivo para diagnóstico.
+- A janela abre maximizada e se adapta a telas de 1366×768 com escala de 125%.
+
 ## Gerar os instaladores pelo GitHub (recomendado)
 
 1. Atualize a versão em `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` e `package.json`.
 2. Crie e envie uma tag:
    ```powershell
-   git tag v0.7.0
-   git push origin v0.7.0
+   git tag v0.8.0
+   git push origin v0.8.0
    ```
 3. O workflow **Release** (`.github/workflows/release.yml`) roda os testes e empacota o servidor. Depois gera o instalador e o portátil do Windows, os pacotes de Linux e macOS e o pacote web, e anexa tudo a um **Release em rascunho**. Revise e publique.
 

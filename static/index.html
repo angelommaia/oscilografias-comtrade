@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Oscilografias COMTRADE</title>
   <link rel="stylesheet" href="/static/css/style.css" />
+  <script>
+    // aplica o tema antes de desenhar (evita piscar claro→escuro)
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("oscilo.theme")
+        || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    } catch (e) { /* ignora */ }
+  </script>
 </head>
 <body>
   <div id="app">
@@ -13,62 +20,74 @@
         <button type="button" class="mode-tab active" data-mode="osc" role="tab">Oscilografia</button>
         <button type="button" class="mode-tab" data-mode="prot" role="tab">Proteção</button>
       </nav>
-      <div class="toolbar-group">
-        <label class="btn file-btn">
-          Abrir COMTRADE
-          <input type="file" id="file-input" accept=".cfg,.CFG,.dat,.DAT" multiple hidden />
-        </label>
-        <button type="button" id="open-native" class="btn hidden" title="Abrir um arquivo .cfg do computador (o .dat é lido da mesma pasta)">Abrir…</button>
-        <select id="recent-select" class="select select-recent hidden" title="Abertos recentemente">
-          <option value="">Recentes…</option>
-        </select>
-        <select id="sample-select" class="select" title="Oscilografias de exemplo">
-          <option value="">Exemplos…</option>
-        </select>
-        <button type="button" id="open-merge" class="btn" title="Juntar oscilografias de terminais diferentes numa base de tempo comum">Juntar registros</button>
+      <button type="button" id="toggle-sidebar" class="btn btn-icon osc-only" title="Mostrar/ocultar a lista de canais">☰</button>
+
+      <div class="menu" id="menu-file">
+        <button type="button" class="btn menu-btn">Arquivo <span class="caret">▾</span></button>
+        <div class="menu-pop">
+          <label class="menu-item file-btn">Abrir COMTRADE…
+            <input type="file" id="file-input" accept=".cfg,.CFG,.dat,.DAT" multiple hidden />
+          </label>
+          <button type="button" id="open-native" class="menu-item hidden" title="O .dat é lido da mesma pasta do .cfg">Abrir… <span class="kbd">Ctrl+O</span></button>
+          <div id="recent-block" class="hidden">
+            <div class="menu-label">Recentes</div>
+            <div id="recent-list" class="menu-list"></div>
+          </div>
+          <div class="menu-label">Exemplos</div>
+          <div id="sample-list" class="menu-list"></div>
+          <div class="menu-sep"></div>
+          <button type="button" id="open-merge" class="menu-item" title="Juntar oscilografias de terminais diferentes numa base de tempo comum">Juntar registros…</button>
+          <button type="button" id="open-report" class="menu-item" title="Word, HTML ou PDF">Relatório…</button>
+        </div>
       </div>
+
       <div class="toolbar-group osc-only">
-        <button id="zoom-in" class="btn" title="Zoom in">+</button>
-        <button id="zoom-out" class="btn" title="Zoom out">−</button>
-        <button id="zoom-fit" class="btn" title="Ajustar à janela">Ajustar</button>
-        <button id="zoom-selection" class="btn" title="Zoom na seleção">Zoom seleção</button>
+        <button id="zoom-out" class="btn btn-icon" title="Afastar (−)">−</button>
+        <button id="zoom-in" class="btn btn-icon" title="Aproximar (+)">+</button>
+        <button id="zoom-fit" class="btn" title="Registro inteiro">Ajustar</button>
+        <button id="zoom-selection" class="btn" title="Zoom no trecho selecionado (arraste na régua)">Seleção</button>
       </div>
+
       <div class="toolbar-group osc-only">
-        <label class="toggle">
-          <input type="radio" name="layout" value="stacked" checked />
-          Faixas separadas
-        </label>
-        <label class="toggle">
-          <input type="radio" name="layout" value="overlay" />
-          Faixa única
-        </label>
-      </div>
-      <div class="toolbar-group osc-only">
-        <button id="toggle-dock" class="btn btn-toggle active" title="Mostrar/ocultar painel de análises">Análises</button>
-      </div>
-      <div class="toolbar-group markers-group osc-only">
-        <button id="add-marker" class="btn" title="Adicionar marcador no cursor">+ Marcador</button>
-        <button id="clear-markers" class="btn" title="Limpar marcadores">Limpar</button>
-      </div>
-      <div class="toolbar-group cursors-group osc-only">
         <button id="set-c1" class="btn btn-c1" title="Fixar o cursor C1 na posição do mouse (tecla 1). Arraste a linha para ajustar.">C1</button>
         <button id="set-c2" class="btn btn-c2" title="Fixar o cursor C2 na posição do mouse (tecla 2). Arraste a linha para ajustar.">C2</button>
-        <button id="clear-cursors" class="btn" title="Remover C1 e C2">×</button>
+        <button id="clear-cursors" class="btn btn-icon" title="Remover C1 e C2">×</button>
       </div>
-      <div class="toolbar-group">
-        <button id="open-report" class="btn" title="Gerar relatório (Word, HTML ou PDF)">Relatório</button>
+
+      <div class="toolbar-group osc-only">
+        <button id="show-all" class="btn" title="Exibir todos os canais do registro">Todos os canais</button>
+        <button id="clear-selection" class="btn" title="Desmarcar todos os canais (limpar a tela)">Limpar tela</button>
+      </div>
+
+      <div class="menu osc-only" id="menu-view">
+        <button type="button" class="btn menu-btn">Exibir <span class="caret">▾</span></button>
+        <div class="menu-pop">
+          <div class="menu-label">Faixas</div>
+          <label class="menu-item"><input type="radio" name="layout" value="stacked" checked /> Uma faixa por canal</label>
+          <label class="menu-item"><input type="radio" name="layout" value="overlay" /> Analógicos sobrepostos</label>
+          <label class="menu-item"><input type="radio" name="density" value="compact" checked /> Faixas compactas</label>
+          <label class="menu-item"><input type="radio" name="density" value="normal" /> Faixas altas</label>
+          <div class="menu-sep"></div>
+          <div class="menu-label">Ao abrir um registro, mostrar</div>
+          <label class="menu-item"><input type="radio" name="onopen" value="all" checked /> Todos os canais</label>
+          <label class="menu-item"><input type="radio" name="onopen" value="changing" /> Analógicos e digitais que mudam</label>
+          <label class="menu-item"><input type="radio" name="onopen" value="analog" /> Só os analógicos principais</label>
+          <div class="menu-sep"></div>
+          <button type="button" id="add-marker" class="menu-item">Marcador no cursor</button>
+          <button type="button" id="clear-markers" class="menu-item">Limpar marcadores</button>
+        </div>
+      </div>
+
+      <div class="toolbar-spacer"></div>
+      <button type="button" id="theme-toggle" class="btn btn-icon theme-btn" title="Alternar tema claro/escuro">☾</button>
+      <div class="menu osc-only" id="menu-analyses">
+        <button type="button" class="btn menu-btn btn-accent">Análises <span class="caret">▾</span></button>
+        <div class="menu-pop menu-pop-right" id="analyses-list"></div>
       </div>
     </header>
 
     <div class="main">
       <aside class="sidebar">
-        <div class="sidebar-header">
-          <h2>Canais</h2>
-          <div class="sidebar-actions">
-            <button id="select-all-analog" class="link-btn">Analógicos</button>
-            <button id="clear-selection" class="link-btn">Limpar</button>
-          </div>
-        </div>
         <div id="record-info" class="record-info"></div>
         <nav class="side-tabs" role="tablist">
           <button type="button" class="side-tab active" data-pane="analog">Analógicos <span class="side-count" id="count-analog"></span></button>
@@ -77,10 +96,12 @@
         </nav>
         <div class="channel-section side-pane active" data-pane="analog">
           <input type="search" id="analog-search" class="channel-search" placeholder="Buscar canal analógico…" />
+          <div class="list-actions"><button type="button" class="link-btn" data-check="analog" data-on="1">Marcar listados</button><button type="button" class="link-btn" data-check="analog" data-on="0">Desmarcar listados</button></div>
           <div id="analog-channels" class="channel-list"></div>
         </div>
         <div class="channel-section side-pane" data-pane="digital">
           <input type="search" id="digital-search" class="channel-search" placeholder="Buscar canal digital…" />
+          <div class="list-actions"><button type="button" class="link-btn" data-check="digital" data-on="1">Marcar listados</button><button type="button" class="link-btn" data-check="digital" data-on="0">Desmarcar listados</button><button type="button" class="link-btn" data-check="changing" data-on="1" title="Marca só os digitais que mudam de estado">Só os que mudam</button></div>
           <div id="digital-channels" class="channel-list"></div>
         </div>
         <div class="channel-section side-pane phasor-section hidden" data-pane="phasor" id="phasor-section">
@@ -127,7 +148,7 @@
         </div>
         <div id="tracks-container" class="tracks-container">
           <div class="empty-state" id="empty-state">
-            <p>Abra um arquivo COMTRADE (.cfg + .dat) ou selecione um exemplo disponível.</p>
+            <p>Abra uma oscilografia em <b>Arquivo</b> (.cfg + .dat) ou escolha um exemplo.</p>
           </div>
         </div>
         <div id="nav-scroll-bar" class="nav-scroll-bar hidden">
@@ -138,10 +159,14 @@
         </div>
       </section>
 
-      <aside id="analysis-dock" class="analysis-dock">
+      <aside id="analysis-dock" class="analysis-dock hidden">
         <div class="dock-resizer" title="Arraste para redimensionar"></div>
         <div class="dock-inner">
-          <nav class="dock-tabs"></nav>
+          <div class="dock-head">
+            <nav class="dock-tabs"></nav>
+            <button type="button" class="btn-icon dock-btn" id="dock-expand" title="Ampliar/reduzir o painel">⤢</button>
+            <button type="button" class="btn-icon dock-btn" id="dock-close" title="Fechar o painel de análises">×</button>
+          </div>
           <div class="dock-body"></div>
           <div id="phasor-panel" class="phasor-panel hidden">
             <button type="button" class="phasor-panel-header" title="Recolher/expandir">Grandezas no cursor <span class="pp-toggle">▾</span></button>

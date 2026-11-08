@@ -130,14 +130,17 @@ export function openReportDialog(ctx) {
     }
     errEl.textContent = "";
     const images = [];
-    if (form.elements.fig_view.checked) {
-      const data = ctx.captureView();
-      if (data) images.push({ caption: "Oscilografia – canais exibidos", data });
-    }
-    if (form.elements.fig_dock.checked) {
-      const img = captureDock();
-      if (img) images.push(img);
-    }
+    // figuras sempre no tema claro (impressão/Word)
+    ctx.withLightTheme(() => {
+      if (form.elements.fig_view.checked) {
+        const data = ctx.captureView();
+        if (data) images.push({ caption: "Oscilografia – canais exibidos", data });
+      }
+      if (form.elements.fig_dock.checked) {
+        const img = captureDock();
+        if (img) images.push(img);
+      }
+    });
     const fmt = action === "docx" ? "docx" : "html";
     const body = {
       format: fmt,

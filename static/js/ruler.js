@@ -1,4 +1,5 @@
 import { formatTime } from "./api.js";
+import { T as TH } from "./core/theme.js";
 
 export class TimelineRuler {
   constructor(canvas, onInteraction) {
@@ -63,15 +64,15 @@ export class TimelineRuler {
 
     const ctx = this.ctx;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--bg-ruler").trim() || "#d8d8d8";
+    ctx.fillStyle = TH.ruler;
     ctx.fillRect(0, 0, w, h);
 
     const span = this.viewEnd - this.viewStart;
     const tickStep = pickTickStep(span, w, span >= 60 ? 105 : 75);
     const firstTick = Math.ceil(this.viewStart / tickStep) * tickStep;
 
-    ctx.strokeStyle = "#999";
-    ctx.fillStyle = "#444";
+    ctx.strokeStyle = TH.rulerTick;
+    ctx.fillStyle = TH.text;
     ctx.font = "11px Segoe UI, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
@@ -86,7 +87,7 @@ export class TimelineRuler {
       ctx.fillText(formatTime(t), x, 2);
     }
 
-    ctx.strokeStyle = "#bbb";
+    ctx.strokeStyle = TH.rulerTickMinor;
     ctx.beginPath();
     ctx.moveTo(0, h - 0.5);
     ctx.lineTo(w, h - 0.5);
@@ -95,25 +96,25 @@ export class TimelineRuler {
     if (this.selection) {
       const x1 = this.timeToX(this.selection.start, w);
       const x2 = this.timeToX(this.selection.end, w);
-      ctx.fillStyle = "rgba(74, 122, 184, 0.25)";
+      ctx.fillStyle = TH.selection;
       ctx.fillRect(Math.min(x1, x2), 0, Math.abs(x2 - x1), h);
     }
 
     for (const marker of this.markers) {
       const x = this.timeToX(marker.time, w);
-      ctx.strokeStyle = "#c06040";
+      ctx.strokeStyle = TH.marker;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
       ctx.stroke();
-      ctx.fillStyle = "#c06040";
+      ctx.fillStyle = TH.marker;
       ctx.textAlign = "left";
       ctx.fillText(marker.label || "M", x + 3, 2);
     }
 
     if (this.cursorTime != null) {
       const x = this.timeToX(this.cursorTime, w);
-      ctx.strokeStyle = "#4a7ab8";
+      ctx.strokeStyle = TH.cursor;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);

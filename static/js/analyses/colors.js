@@ -1,8 +1,8 @@
 // Cores por fase (validadas para daltonismo – ver README). A identidade nunca
 // depende só da cor: V = traço contínuo, I = tracejado, e todo fasor/laço tem rótulo.
+// Os objetos são atualizados por core/theme.js ao trocar entre tema claro/escuro.
 export const PHASE_COLORS = { A: "#b8471c", B: "#2a9d8f", C: "#4a3fbf" };
-export const NEUTRAL_INK = "#4a4a4a";
-export const MUTED_INK = "#8a8a8a";
+export const INK = { neutral: "#4a4a4a", muted: "#8a8a8a" };
 
 export const LOOP_STYLE = {
   AG: { color: PHASE_COLORS.A, dash: [] },

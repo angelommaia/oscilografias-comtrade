@@ -214,7 +214,14 @@ class ComtradeStore:
             else:
                 raw = np.asarray(data.digital[pos][start:end], dtype=float)
 
-            times, values = self._decimate_minmax(time_full, raw, max_points)
+            if info.kind == "digital":
+                # só as transições (+ início e fim): desenho exato e resposta pequena,
+                # mesmo com centenas de digitais na tela
+                ch_idx = np.flatnonzero(np.diff(raw)) + 1
+                pts = np.unique(np.concatenate(([0], ch_idx, [len(raw) - 1]))) if len(raw) else np.array([], dtype=int)
+                times, values = time_full[pts], raw[pts]
+            else:
+                times, values = self._decimate_minmax(time_full, raw, max_points)
             y_min, y_max = self._channel_y_limits(info, raw)
             values = np.asarray(values, dtype=float)
             vals = values.tolist()

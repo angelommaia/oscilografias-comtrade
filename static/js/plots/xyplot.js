@@ -10,6 +10,7 @@
  *   });
  *   plot.setDataBounds({xmin, xmax, ymin, ymax}); plot.fit(); plot.draw();
  */
+import { T as TH } from "../core/theme.js";
 export class XYPlot {
   constructor(canvas, options = {}) {
     this.canvas = canvas;
@@ -119,7 +120,7 @@ export class XYPlot {
     const T = this.transform();
     const r = T.rect;
 
-    g.fillStyle = "#fff";
+    g.fillStyle = TH.surface;
     g.fillRect(r.x, r.y, r.w, r.h);
 
     // grade
@@ -127,14 +128,14 @@ export class XYPlot {
     const yt = this.opts.logY ? logTicks(T.view.ymin, T.view.ymax) : niceTicks(T.view.ymin, T.view.ymax, Math.max(3, Math.floor(r.h / 50)));
     g.lineWidth = 1;
     g.font = "10px Segoe UI, sans-serif";
-    g.fillStyle = "#666";
+    g.fillStyle = TH.textMuted;
     g.textAlign = "center";
     g.textBaseline = "top";
     const xdec = this.opts.logX ? null : stepDecimals(xt);
     const ydec = this.opts.logY ? null : stepDecimals(yt);
     for (const t of xt) {
       const sx = Math.round(T.x(t)) + 0.5;
-      g.strokeStyle = t === 0 && !this.opts.logX ? "#9a9a9a" : "#ececec";
+      g.strokeStyle = t === 0 && !this.opts.logX ? TH.gridStrong : TH.gridLight;
       g.beginPath(); g.moveTo(sx, r.y); g.lineTo(sx, r.y + r.h); g.stroke();
       if (!this.opts.logX || isLabelTick(t)) g.fillText(fmtTick(t, xdec), sx, r.y + r.h + 4);
     }
@@ -142,14 +143,14 @@ export class XYPlot {
     g.textBaseline = "middle";
     for (const t of yt) {
       const sy = Math.round(T.y(t)) + 0.5;
-      g.strokeStyle = t === 0 && !this.opts.logY ? "#9a9a9a" : "#ececec";
+      g.strokeStyle = t === 0 && !this.opts.logY ? TH.gridStrong : TH.gridLight;
       g.beginPath(); g.moveTo(r.x, sy); g.lineTo(r.x + r.w, sy); g.stroke();
       if (!this.opts.logY || isLabelTick(t)) g.fillText(fmtTick(t, ydec), r.x - 4, sy);
     }
-    g.strokeStyle = "#c8c8c8";
+    g.strokeStyle = TH.border;
     g.strokeRect(r.x + 0.5, r.y + 0.5, r.w, r.h);
 
-    g.fillStyle = "#444";
+    g.fillStyle = TH.text;
     g.font = "11px Segoe UI, sans-serif";
     g.textAlign = "center";
     g.textBaseline = "bottom";
