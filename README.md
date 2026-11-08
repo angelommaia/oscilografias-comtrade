@@ -6,7 +6,7 @@ Visualização, fasores, impedância, harmônicos e simulação de funções de 
 [![Última versão](https://img.shields.io/github/v/release/angelommaia/oscilografias-comtrade?label=baixar&color=1f3b73)](https://github.com/angelommaia/oscilografias-comtrade/releases/latest)
 [![Licença](https://img.shields.io/github/license/angelommaia/oscilografias-comtrade?color=555)](LICENSE)
 
-![Falta interna em transformador: formas de onda e diagrama fasorial](docs/img/oscilografia.png)
+![Falta interna em transformador no tema escuro: formas de onda com os cursores C1/C2 e diagrama fasorial](docs/img/oscilografia.png)
 
 ## Download
 
@@ -32,8 +32,10 @@ O instalador e a versão portátil não precisam de Python nem de internet, e os
   - correntes máximas e afundamentos de tensão;
   - tempos de partida, trip e abertura do disjuntor, interrupção por polo e religamento;
   - identificação de energização por inrush.
+
+  ![Resumo automático de uma falta fase A-terra em transformador, no tema escuro](docs/img/resumo.png)
 - **Interface enxuta** para notebooks: menus, painéis de análise sob demanda e tema claro ou escuro.
-- **Relatório** em Word (.docx), HTML ou PDF, com resumo, eventos, medições, figuras e os comentários do analista.
+- **Relatório** em Word (.docx), HTML ou PDF, com resumo, eventos, medições, figuras e os comentários do analista. Termina com as **informações de processamento**: versão do programa, data/hora, SHA-256 do arquivo analisado e parâmetros de cálculo usados.
 - **Grupos trifásicos** reconhecidos automaticamente, inclusive por cores (azul/branca/vermelha, como `Vaz`, `Ibr` e `VR`), pelo campo de fase do arquivo ou pela ordem dos canais quando o nome não traz a fase. Uma verificação de rotação aponta fases trocadas (sequência ACB); também é possível montar os grupos manualmente.
 - **Juntar registros** de terminais ou IEDs diferentes numa base de tempo comum. O alinhamento pode ser feito pelo início da perturbação (registros sem sincronismo), pelo trigger ou pelo horário GPS, com ajuste fino manual; o programa também mostra o erro de relógio de cada arquivo. Todas as análises funcionam sobre o registro combinado.
 - **Fasores** estimados por mínimos quadrados, exatos mesmo com número fracionário de amostras por ciclo. Também disponíveis: DFT e variantes com rejeição de DC.
@@ -45,8 +47,8 @@ O instalador e a versão portátil não precisam de Python nem de internet, e os
 - **Modo Proteção** com ajustes livres e convenções de vários fabricantes. Simula partida e trip no tempo e compara o resultado com os canais digitais do registro.
 
 <p>
-  <img src="docs/img/protecao-87t.png" width="49%" alt="87T: energização com inrush (bloqueio por 2ª harmônica) e falta interna">
-  <img src="docs/img/protecao-78.png" width="49%" alt="78: oscilação de potência e perda de sincronismo no plano R-X">
+  <img src="docs/img/protecao-87t.png" width="49%" alt="87T no tema escuro: energização com inrush (bloqueio por 2ª harmônica) e falta interna">
+  <img src="docs/img/protecao-78.png" width="49%" alt="78 no tema escuro: oscilação de potência e perda de sincronismo no plano R-X">
 </p>
 
 | Função | O que mostra |
@@ -62,6 +64,7 @@ O programa já vem com **oscilografias de exemplo sintéticas**: falta interna e
 
 ## Documentação
 
+- [Guia do usuário](docs/guia-do-usuario.md)
 - [Versão desktop e portátil: como funciona e como compilar](docs/desktop.md)
 - [Desenvolvimento: executar pelo código, publicar a versão web, arquitetura e API](docs/desenvolvimento.md)
 

@@ -111,6 +111,8 @@ backend/analysis/
 └── builtin/        # summary.py, events.py, cursors.py, phasor_diagram.py, impedance.py, harmonics.py
 backend/merge.py    # registro combinado: alinhamento (perturbação/trigger/GPS) e reamostragem
 backend/report/     # relatório: builder.py (conteúdo → DOCX/HTML), docx.py (DOCX sem dependências)
+backend/provenance.py  # arquivos de origem de cada registro (SourceFile/SourceRef) e SHA-256 do .dat sob demanda
+backend/version.py  # versão do programa, lida de src-tauri/tauri.conf.json
 static/js/analyses/
 ├── dock.js         # painel com abas, formulário automático de parâmetros, disparo/concorrência
 ├── index.js        # registro das views
@@ -171,7 +173,7 @@ Oscilografias/
 | POST | `/api/records/{id}/analyses/{analysis_id}` | Executa análise `{time_s, t_start, t_end, voltage_group, current_group, channels, params}` |
 | GET | `/api/records` | Registros abertos na sessão do servidor |
 | POST | `/api/merge` | Junta registros `{records: [{id, label, offset_ms}], mode: onset\|trigger\|absolute, reference}` |
-| POST | `/api/records/{id}/report` | Gera relatório `{format: docx\|html, title, analyst, comments, conclusion, sections, cursors, images}`; na versão desktop aceita `save_path` |
+| POST | `/api/records/{id}/report` | Gera relatório `{format: docx\|html, title, analyst, comments, conclusion, sections, cursors, images}`; na versão desktop aceita `save_path`. Campos opcionais (rastreabilidade): `generated_at` (data/hora local já formatada), `estimator`, `window_cycles`, `impedance_params` (parâmetros da aba R-X, só quando a figura dela vai no relatório) |
 
 ### Oscilografias grandes
 
@@ -181,3 +183,31 @@ Oscilografias/
 - Para arquivos muito grandes no uso local, evite o upload: aponte `COMTRADE_SAMPLES_DIR` para a pasta das oscilografias e abra pelo menu **Exemplos**.
 
 Variável opcional: `MAX_RECORDS_IN_MEMORY` (padrão 12) – registros mais antigos são descartados (LRU).
+
+## Versão
+
+A fonte única é `src-tauri/tauri.conf.json` (também lida por `scripts/build.ps1`,
+`scripts/package_web.py` e `release.yml`). `package.json` e `src-tauri/Cargo.toml`
+repetem o número – o Cargo exige literal – e `tests/test_version.py` falha se
+divergirem. O backend lê a versão em `backend/version.py` (`OSCILO_VERSION`, se
+definida; senão `<ROOT>/src-tauri/tauri.conf.json`) e a expõe em
+`GET /api/health` (`{status, version, desktop}`), usada pela janela "Sobre o Oscilo".
+Por isso o arquivo vai junto em todos os pacotes: no spec do PyInstaller (`datas`),
+no pacote web e no Dockerfile.
+
+## Rastreabilidade do relatório
+
+Cada `RecordData` tem `sources: list[SourceRef]`. Num registro aberto do disco, o
+`SourceFile` guarda o caminho do .dat e calcula o SHA-256 em blocos de 1 MB só
+quando o relatório é gerado (resultado em cache). No upload da versão web o .dat
+fica num diretório temporário apagado após a leitura; por isso o hash é calculado
+durante a gravação do upload (`_save_upload_limited`) e entregue pronto. O registro
+combinado reaproveita os `SourceFile` de origem, com rótulo, modo de alinhamento
+usado e ajuste manual. O relatório mostra só nomes de arquivo (`provenance.safe_name`).
+
+## Links externos na versão desktop
+
+A janela Tauri não navega para fora do servidor local: `static/js/about.js` chama
+`plugin:opener|open_url`, e `lib.rs` concede `opener:allow-open-url` à origem
+`http://127.0.0.1:<porta>` só para URLs `https://*`, junto com
+`dialog:allow-open`/`allow-save`.

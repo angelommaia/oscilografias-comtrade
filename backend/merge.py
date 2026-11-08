@@ -26,6 +26,7 @@ import numpy as np
 
 from analysis import AnalysisContext, RecordData
 from analysis.sequence import parse_timestamp, trigger_offset_s
+from provenance import SourceRef
 
 MAX_MERGED_VALUES = 120_000_000  # amostras × canais analógicos
 MAX_FS = 50_000.0
@@ -311,5 +312,11 @@ def merge_records(store, items: list[dict[str, Any]], mode: str = "onset", refer
         merge=spec,
     )
     data = RecordData(meta=meta, time=time, analog=analog, digital=digital, auto_groups=groups)
+    # rastreabilidade: os mesmos objetos SourceFile dos registros de origem (hash em cache
+    # compartilhado), válidos mesmo que um registro de origem saia da memória
+    for item, d, al in zip(items, datas, align):
+        for src in d.sources[:1]:
+            data.sources.append(SourceRef(src.file, label=item["label"], align_mode=al.get("mode_used", mode),
+                                          offset_ms=float(item.get("offset_ms") or 0.0)))
     store._register(data)
     return meta

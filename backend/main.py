@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import tempfile
 from pathlib import Path
 
@@ -31,12 +32,13 @@ from config import (
     SAMPLES_DIR,
 )
 from sample_catalog import get_sample_cfg_path, list_samples
+from version import get_version
 
 STATIC_DIR = ROOT / "static"
 
 app = FastAPI(
     title="Oscilografias COMTRADE",
-    version="0.8.0",
+    version=get_version(),
     docs_url=None if IS_PRODUCTION else "/docs",
     redoc_url=None if IS_PRODUCTION else "/redoc",
     openapi_url=None if IS_PRODUCTION else "/openapi.json",
@@ -114,6 +116,11 @@ class ReportBody(BaseModel):
     images: list[ReportImage] = Field(default_factory=list, max_length=12)
     source_name: str = Field("", max_length=260)
     save_path: str | None = Field(None, max_length=4096)  # só na versão desktop
+    # rastreabilidade (opcionais – payloads antigos continuam válidos)
+    generated_at: str = Field("", max_length=40)  # data/hora local do analista, formatada
+    estimator: str | None = Field(None, max_length=40)
+    window_cycles: float | None = Field(None, gt=0, le=16)
+    impedance_params: dict | None = None  # só quando a figura da aba R-X vai no relatório
 
 
 def _meta_to_dict(meta) -> dict:
@@ -164,14 +171,18 @@ def _error_detail(exc: Exception) -> str:
     return str(exc)
 
 
-async def _save_upload_limited(upload: UploadFile, dest: Path, label: str) -> None:
-    """Grava o upload em disco em blocos de 4 MB, respeitando o limite."""
+async def _save_upload_limited(upload: UploadFile, dest: Path, label: str) -> str:
+    """Grava o upload em disco em blocos de 4 MB, respeitando o limite.
+    Devolve o SHA-256 do conteúdo, calculado durante a gravação (o arquivo
+    temporário é apagado logo após a leitura e não poderia ser relido depois)."""
     total = 0
+    digest = hashlib.sha256()
     with dest.open("wb") as fh:
         while True:
             chunk = await upload.read(4 * 1024 * 1024)
             if not chunk:
                 break
+            digest.update(chunk)
             total += len(chunk)
             if total > MAX_UPLOAD_BYTES:
                 raise HTTPException(
@@ -180,6 +191,7 @@ async def _save_upload_limited(upload: UploadFile, dest: Path, label: str) -> No
                     "(ajuste a variável MAX_UPLOAD_BYTES).",
                 )
             fh.write(chunk)
+    return digest.hexdigest()
 
 
 @app.middleware("http")
@@ -263,10 +275,11 @@ async def load_from_upload(
             cfg_path = Path(tmp) / "upload.cfg"
             dat_path = Path(tmp) / "upload.dat"
             await _save_upload_limited(cfg, cfg_path, "CFG")
-            await _save_upload_limited(dat, dat_path, "DAT")
+            dat_sha256 = await _save_upload_limited(dat, dat_path, "DAT")
             # decodificação é CPU-bound: roda fora do loop de eventos
             meta = await run_in_threadpool(store.load_from_upload, cfg_path, dat_path,
-                                           Path((cfg.filename or "").replace("\\", "/")).name or None)
+                                           Path((cfg.filename or "").replace("\\", "/")).name or None,
+                                           dat_sha256)
         return _meta_to_dict(meta)
     except HTTPException:
         raise
@@ -470,6 +483,10 @@ def make_report(record_id: str, body: ReportBody):
             images=[img.model_dump() for img in body.images],
             source_name=Path(body.source_name.replace("\\", "/")).name,
             app_version=app.version,
+            generated_at=body.generated_at.strip(),
+            estimator=body.estimator,
+            window_cycles=body.window_cycles,
+            impedance_params=body.impedance_params,
         )
         content = build_report(ctx, opts, body.format)
     except KeyError as exc:

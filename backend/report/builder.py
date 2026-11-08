@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from analysis import AnalysisRequest, get_analysis
+from analysis.dsp import get_estimator
 from analysis.sequence import CATEGORIES
 
 from .docx import DocxBuilder, png_size
@@ -37,6 +38,11 @@ class ReportOptions:
     images: list[dict[str, str]] = field(default_factory=list)  # [{caption, data(base64 PNG)}]
     source_name: str = ""
     app_version: str = ""
+    # rastreabilidade (bloco "Informações de processamento"); todos opcionais
+    generated_at: str = ""  # data/hora local do analista, já formatada pela interface
+    estimator: str | None = None  # estimador fasorial em uso na interface
+    window_cycles: float | None = None  # janela fasorial em ciclos
+    impedance_params: dict[str, Any] | None = None  # parâmetros da aba R-X, quando a figura dela vai no relatório
 
     def want(self, key: str) -> bool:
         return self.sections.get(key, True) is not False
@@ -87,6 +93,8 @@ def _rel(t: float | None, trig: float | None) -> str:
 
 
 # --------------------------------------------------------------------- blocos
+# Tipos de bloco: h, p, note, kv, table, img e, no fim, o bloco de processamento em
+# fonte menor: ph (título), pp (parágrafo), pkv (chave/valor), ptable (tabela).
 class Blocks(list):
     def h(self, text, level=1):
         self.append(("h", level, text))
@@ -105,6 +113,11 @@ class Blocks(list):
 
     def img(self, png, caption):
         self.append(("img", png, caption))
+
+    def small_kv(self, rows):
+        rows = [(k, v) for k, v in rows if v not in (None, "")]
+        if rows:
+            self.append(("pkv", rows))
 
 
 def _decode_image(item: dict[str, str]) -> bytes:
@@ -290,7 +303,87 @@ def collect(ctx, opts: ReportOptions) -> Blocks:
 
     b.p(f"Valores calculados automaticamente pelo Oscilo {opts.app_version} a partir do registro COMTRADE; "
         "confira os instantes e grandezas na oscilografia antes de concluir.", "note")
+    processing_block(b, ctx, opts, summary)
     return b
+
+
+# ------------------------------------------------- informações de processamento
+ALIGN_LABELS = {
+    "onset": "onset (início da perturbação)",
+    "trigger": "trigger",
+    "absolute": "absolute (horário do .cfg)",
+}
+
+
+def _hash_text(src) -> str:
+    h = src.sha256_short()
+    return f"{h}…" if h else "indisponível"
+
+
+def _comtrade_text(src) -> str:
+    parts = [f"COMTRADE {src.revision}" if src.revision else "", src.data_format]
+    return " · ".join(p for p in parts if p) or "—"
+
+
+def _estimator_text(estimator: str | None) -> str | None:
+    if not estimator:
+        return None
+    try:
+        return get_estimator(estimator).name
+    except ValueError:
+        return estimator
+
+
+def _k0_text(ctx, params: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Base (primário/secundário) e k0 em uso na aba R-X."""
+    imp = get_analysis("impedance")
+    req = AnalysisRequest(params=params or {})
+    side = imp.param(req, "side")
+    base = "ohms secundários (RTC/RTP)" if side == "secondary" else "ohms primários"
+    mode = imp.param(req, "k0_mode")
+    k0, _, _ = imp._k0(req)
+    how = {"z0z1": "calculado de Z1/Z0 da linha", "k0": "informado", "none": "sem compensação"}.get(mode, mode)
+    return base, f"{fnum(abs(k0), '', 3, si=False)} ∠ {fnum(math.degrees(math.atan2(k0.imag, k0.real)), '', 1, si=False)}° ({how})"
+
+
+def processing_block(b: Blocks, ctx, opts: ReportOptions, summary: dict[str, Any]) -> None:
+    """Bloco final discreto: versão, data/hora, arquivos de origem (com hash do
+    .dat) e parâmetros de cálculo. Só nomes de arquivo – nunca caminhos."""
+    when = opts.generated_at.strip() or datetime.now().strftime("%d/%m/%Y %H:%M")
+    b.append(("ph", "Informações de processamento"))
+    b.append(("pp", f"Gerado pelo Oscilo v{opts.app_version} em {when}"))
+
+    sources = list(getattr(ctx.data, "sources", []) or [])
+    if ctx.meta.merge and sources:
+        b.append(("ptable", ["Rótulo", "Arquivo", "Formato", "SHA-256 do .dat", "Alinhamento", "Ajuste"], [
+            [s.label, s.file.name, _comtrade_text(s.file), _hash_text(s.file),
+             ALIGN_LABELS.get(s.align_mode or "", s.align_mode or "—"),
+             fnum(s.offset_ms or 0.0, "ms", 1, si=False)]
+            for s in sources
+        ], [1.2, 2, 1.4, 1.5, 1.7, 0.9]))
+    elif sources:
+        s = sources[0]
+        b.small_kv([
+            ("Arquivo analisado", s.file.name),
+            ("Formato", _comtrade_text(s.file)),
+            ("SHA-256 do .dat", _hash_text(s.file)),
+        ])
+
+    vg = (summary.get("voltage_group") or {}).get("label")
+    cg = (summary.get("current_group") or {}).get("label")
+    rows = [
+        ("Estimador fasorial", _estimator_text(opts.estimator)),
+        ("Janela", fnum(opts.window_cycles, "ciclo(s)", 2, si=False) if opts.window_cycles else None),
+        ("Grupo de tensão", (vg + ("" if opts.voltage_group else " (automático)")) if vg else None),
+        ("Grupo de corrente", (cg + ("" if opts.current_group else " (automático)")) if cg else None),
+    ]
+    if opts.impedance_params is not None:
+        try:
+            base, k0 = _k0_text(ctx, opts.impedance_params)
+        except ValueError:
+            base, k0 = None, "parâmetros inválidos"
+        rows += [("R-X: base", base), ("R-X: k0", k0)]
+    b.small_kv(rows)
 
 
 # --------------------------------------------------------------------- render
@@ -314,6 +407,14 @@ def render_docx(blocks: Blocks, opts: ReportOptions, meta) -> bytes:
             doc.table(blk[1], blk[2], blk[3], font_size=17)
         elif kind == "img":
             doc.image(blk[1], blk[2])
+        elif kind == "ph":
+            doc.paragraph(blk[1], style="Heading2")
+        elif kind == "pp":
+            doc.paragraph(blk[1], size=16, color="595959")
+        elif kind == "pkv":
+            doc.table(None, [[k, v] for k, v in blk[1]], [1, 2.6], first_col_bold=True, font_size=15)
+        elif kind == "ptable":
+            doc.table(blk[1], blk[2], blk[3], font_size=15)
     return doc.to_bytes()
 
 
@@ -335,6 +436,10 @@ table.kv td:first-child { font-weight: 600; width: 32%; }
 figure { margin: 10px 0 16px; text-align: center; break-inside: avoid; }
 figure img { max-width: 100%; border: 1px solid #ddd; }
 figcaption { font-style: italic; font-size: 9pt; color: #404040; margin-top: 4px; }
+.processing { margin-top: 24px; color: #595959; font-size: 8pt; break-inside: avoid; }
+.processing h3 { color: #595959; font-size: 10pt; border-top: 1px solid #c9d3e6; padding-top: 6px; }
+.processing p { margin: 2px 0 6px; }
+.processing table { font-size: 7.5pt; margin: 2px 0 8px; }
 """
 
 
@@ -346,6 +451,7 @@ def render_html(blocks: Blocks, opts: ReportOptions, meta) -> bytes:
     sub = " · ".join(x for x in (meta.station, meta.device, meta.trigger_time) if x)
     if sub:
         out.append(f'<p class="subtitle">{e(sub)}</p>')
+    in_proc = False
     for blk in blocks:
         kind = blk[0]
         if kind == "h":
@@ -364,6 +470,20 @@ def render_html(blocks: Blocks, opts: ReportOptions, meta) -> bytes:
         elif kind == "img":
             b64 = base64.b64encode(blk[1]).decode("ascii")
             out.append(f'<figure><img src="data:image/png;base64,{b64}" alt=""><figcaption>{e(blk[2])}</figcaption></figure>')
+        elif kind == "ph":
+            out.append(f'<section class="processing"><h3>{e(blk[1])}</h3>')
+            in_proc = True
+        elif kind == "pp":
+            out.append(f"<p>{e(blk[1])}</p>")
+        elif kind == "pkv":
+            rows = "".join(f"<tr><td>{e(k)}</td><td>{e(v)}</td></tr>" for k, v in blk[1])
+            out.append(f'<table class="kv">{rows}</table>')
+        elif kind == "ptable":
+            head = "".join(f"<th>{e(h)}</th>" for h in blk[1])
+            rows = "".join("<tr>" + "".join(f"<td>{e(c)}</td>" for c in r) + "</tr>" for r in blk[2])
+            out.append(f"<table><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>")
+    if in_proc:
+        out.append("</section>")
     out.append("</body></html>")
     return "".join(out).encode("utf-8")
 

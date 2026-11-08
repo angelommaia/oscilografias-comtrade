@@ -38,6 +38,8 @@
           <div class="menu-sep"></div>
           <button type="button" id="open-merge" class="menu-item" title="Juntar oscilografias de terminais diferentes numa base de tempo comum">Juntar registros…</button>
           <button type="button" id="open-report" class="menu-item" title="Word, HTML ou PDF">Relatório…</button>
+          <div class="menu-sep"></div>
+          <button type="button" id="open-about" class="menu-item">Sobre o Oscilo…</button>
         </div>
       </div>
 
@@ -229,6 +231,23 @@
       </form>
     </dialog>
 
+    <dialog id="about-dialog" class="group-dialog about-dialog">
+      <form method="dialog">
+        <h3>Oscilo</h3>
+        <p class="ab-version"></p>
+        <p class="ab-desc">Análise de oscilografias COMTRADE de perturbações em sistemas de transmissão.</p>
+        <p>Desenvolvido por <a class="ab-link" href="https://github.com/angelommaia">Angelo Maia</a></p>
+        <ul class="ab-links">
+          <li><a class="ab-link" href="https://github.com/angelommaia/oscilografias-comtrade">Repositório no GitHub</a></li>
+          <li><a class="ab-link" href="https://github.com/angelommaia/oscilografias-comtrade/blob/main/docs/guia-do-usuario.md">Guia do usuário</a></li>
+        </ul>
+        <p>Licença GPL v3</p>
+        <p class="ab-edition muted"></p>
+        <div class="dlg-actions">
+          <button value="close" class="btn btn-primary">Fechar</button>
+        </div>
+      </form>
+    </dialog>
 
     <footer class="statusbar">
       <span id="status-position">Posição: —</span>
@@ -236,6 +255,7 @@
       <span id="status-zoom">Zoom: 100%</span>
       <span id="status-markers">Marcadores: 0</span>
       <span id="status-cursors">C1/C2: teclas 1 e 2</span>
+      <button type="button" id="status-version" class="status-version" title="Sobre o Oscilo"></button>
     </footer>
   </div>
 

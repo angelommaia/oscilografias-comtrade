@@ -49,6 +49,8 @@ def main() -> None:
         for name in ("iniciar.bat", "iniciar.sh", "LEIA-ME.txt"):
             add(zf, ROOT / "web" / name, f"Oscilo/{name}", executable=name.endswith(".sh"))
         add(zf, ROOT / "LICENSE", "Oscilo/LICENSE")
+        # versão do programa (lida por backend/version.py)
+        add(zf, ROOT / "src-tauri" / "tauri.conf.json", "Oscilo/src-tauri/tauri.conf.json")
 
     print(f"{target} ({target.stat().st_size / 1e6:.1f} MB)")
 

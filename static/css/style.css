@@ -740,6 +740,28 @@ html, body {
 .group-dialog .select { min-width: 0; width: 100%; }
 .dlg-error { color: var(--danger); font-size: 12px; margin: 0; min-height: 1em; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* Sobre o Oscilo */
+.about-dialog { width: min(380px, calc(100vw - 32px)); }
+.about-dialog h3 { margin-bottom: 2px; font-size: 16px; }
+.about-dialog p { margin: 0; font-size: 12px; line-height: 1.5; }
+.about-dialog .ab-version { color: var(--text-muted); margin-bottom: 4px; }
+.about-dialog .ab-desc { color: var(--text-muted); }
+.about-dialog .ab-links { margin: 0; padding-left: 18px; font-size: 12px; line-height: 1.6; }
+.about-dialog a { color: var(--accent); }
+.about-dialog a:hover { color: var(--accent-hover); }
+.about-dialog .ab-edition { font-size: 11px; color: var(--text-muted); }
+.status-version {
+  margin-left: auto;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.status-version:hover { color: var(--accent); text-decoration: underline; }
 .hm-wrap { overflow-x: auto; }
 
 /* Indicador de carregamento */

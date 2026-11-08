@@ -27,7 +27,7 @@ hidden = (
     + collect_submodules("analysis")
     + collect_submodules("protection")
     + collect_submodules("report")
-    + ["comtrade", "comtrade_reader", "comtrade_service", "merge", "phasor_analysis", "sample_catalog", "config", "main"]
+    + ["comtrade", "comtrade_reader", "comtrade_service", "merge", "phasor_analysis", "sample_catalog", "config", "main", "version", "provenance"]
 )
 
 a = Analysis(
@@ -36,6 +36,8 @@ a = Analysis(
     datas=[
         (os.path.join(ROOT, "static"), "static"),
         (os.path.join(ROOT, "samples"), "samples"),
+        # versão do programa (lida por backend/version.py)
+        (os.path.join(ROOT, "src-tauri", "tauri.conf.json"), "src-tauri"),
     ],
     hiddenimports=hidden,
     excludes=[

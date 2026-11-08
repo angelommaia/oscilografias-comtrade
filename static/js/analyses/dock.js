@@ -74,6 +74,7 @@ export class AnalysisDock {
 
       const tab = document.createElement("button");
       tab.className = "dock-tab";
+      tab.dataset.analysis = schema.id;
       tab.textContent = view.title;
       tab.title = schema.description;
       tab.addEventListener("click", () => this.activate(panel));

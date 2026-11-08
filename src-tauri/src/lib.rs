@@ -179,6 +179,7 @@ fn show_error(app: &AppHandle, msg: &str) {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let port = free_port()?;
@@ -213,12 +214,18 @@ pub fn run() {
                 }
                 let origin = format!("http://127.0.0.1:{port}");
                 // A interface servida pelo backend só pode usar os diálogos "Abrir" e "Salvar"
-                // (o arquivo do relatório é gravado pelo backend no caminho escolhido).
+                // (o arquivo do relatório é gravado pelo backend no caminho escolhido) e abrir
+                // links https no navegador padrão do sistema (janela "Sobre o Oscilo").
                 let cap = CapabilityBuilder::new("local-server")
                     .remote(format!("{origin}/*"))
                     .window("main")
                     .permission("dialog:allow-open")
-                    .permission("dialog:allow-save");
+                    .permission("dialog:allow-save")
+                    .permission_scoped(
+                        "opener:allow-open-url",
+                        vec![serde_json::json!({ "url": "https://*" })],
+                        vec![],
+                    );
                 if let Err(e) = handle.add_capability(cap) {
                     eprintln!("capability: {e}");
                 }

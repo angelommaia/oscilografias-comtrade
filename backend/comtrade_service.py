@@ -16,6 +16,7 @@ import comtrade
 import numpy as np
 
 from comtrade_reader import read_record
+from provenance import SourceFile, SourceRef
 from analysis import AnalysisContext, AnalysisRequest, RecordData, get_analysis
 from analysis.dsp import list_estimators
 from analysis.context import plot_step
@@ -75,7 +76,10 @@ class ComtradeStore:
         self._max_records = max(1, max_records)
 
     # ------------------------------------------------------------ carga
-    def load_from_path(self, cfg_path: Path, source_name: str | None = None) -> RecordMeta:
+    def load_from_path(self, cfg_path: Path, source_name: str | None = None,
+                       dat_sha256: str | None = None, keep_dat_path: bool = True) -> RecordMeta:
+        """Carrega um par .cfg/.dat. `dat_sha256`: hash já calculado (upload);
+        `keep_dat_path=False` quando o .dat é temporário e não pode ser relido."""
         cfg_path = cfg_path.resolve()
         if not cfg_path.exists():
             raise FileNotFoundError(f"Arquivo CFG não encontrado: {cfg_path}")
@@ -107,6 +111,14 @@ class ComtradeStore:
             digital=status,
             auto_groups=detect_three_phase_groups(meta.analog_channels),
         )
+        cfg = getattr(rec, "cfg", None)
+        data.sources = [SourceRef(SourceFile(
+            name=meta.source_name,
+            revision=str(meta.revision or ""),
+            data_format=str(getattr(cfg, "ft", "") or "").strip().upper(),
+            dat_path=dat_path.resolve() if keep_dat_path else None,
+            _sha256=dat_sha256,
+        ))]
         apply_rotation_checks(
             data.auto_groups,
             lambda idx, i0, i1: analog[idx][i0:i1],
@@ -141,10 +153,12 @@ class ComtradeStore:
     def context(self, record_id: str) -> AnalysisContext:
         return AnalysisContext(self._get(record_id))
 
-    def load_from_upload(self, cfg_file: Path, dat_file: Path, source_name: str | None = None) -> RecordMeta:
+    def load_from_upload(self, cfg_file: Path, dat_file: Path, source_name: str | None = None,
+                         dat_sha256: str | None = None) -> RecordMeta:
         """Carrega arquivos já gravados em disco (o upload é transmitido em
-        blocos para um diretório temporário, sem passar inteiro pela RAM)."""
-        return self.load_from_path(cfg_file, source_name)
+        blocos para um diretório temporário, sem passar inteiro pela RAM).
+        O diretório é apagado em seguida: o hash do .dat vem calculado da gravação."""
+        return self.load_from_path(cfg_file, source_name, dat_sha256=dat_sha256, keep_dat_path=False)
 
     @staticmethod
     def _find_dat_file(cfg_path: Path) -> Path | None:

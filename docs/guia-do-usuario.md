@@ -45,7 +45,7 @@ A tela tem quatro áreas: a barra superior, a lista de canais à esquerda, as fo
 | Controle | Para que serve |
 | --- | --- |
 | ☰ | Mostra ou oculta a lista de canais |
-| Arquivo ▾ | Abrir, Recentes, Exemplos, Juntar registros…, Relatório… |
+| Arquivo ▾ | Abrir, Recentes, Exemplos, Juntar registros…, Relatório… e, no fim, Sobre o Oscilo… |
 | − / + | Afastar e aproximar o zoom |
 | Ajustar | Volta ao registro inteiro |
 | Seleção | Zoom no trecho selecionado na régua |
@@ -66,7 +66,9 @@ A tela tem quatro áreas: a barra superior, a lista de canais à esquerda, as fo
 
 **Painel de análises.** Fica fechado por padrão e, fechado, não calcula nada — isso mantém o programa leve em notebooks. Use ⤢ para ampliar e × para fechar. O rodapé recolhível **Grandezas no cursor** mostra os valores no ponto do cursor.
 
-**Barra de status** (rodapé): posição, seleção, zoom, número de marcadores e o lembrete das teclas 1 e 2.
+**Barra de status** (rodapé): posição, seleção, zoom, número de marcadores e o lembrete das teclas 1 e 2. À direita aparece a versão do programa (ex.: **v0.8.1**); clique nela para abrir a janela **Sobre o Oscilo**.
+
+**Sobre o Oscilo** (**Arquivo ▾ → Sobre o Oscilo…** ou clique na versão da barra de status) mostra a versão, o autor, os links para o repositório e para este guia, a licença (GPL v3) e se você está na versão desktop ou na web. Na versão desktop os links abrem no navegador padrão do sistema; na web, numa nova aba.
 
 ## 4. Navegar no registro
 
@@ -184,6 +186,15 @@ Cuidado com a diferença angular: sem GPS, ela inclui o erro de alinhamento (21,
 - Figura do gráfico da aba de análise aberta
 
 As figuras saem do que está na tela: antes de gerar, deixe o zoom, os canais e a aba de análise como você quer que apareçam. Elas sempre saem no tema claro, mesmo se você estiver usando o escuro.
+
+**Informações de processamento.** O relatório termina com um bloco discreto, em letra menor, que permite saber depois como ele foi gerado:
+
+- versão do Oscilo e data/hora (do seu computador) em que o relatório foi gerado;
+- arquivo analisado: nome do .cfg, revisão e formato COMTRADE e os 12 primeiros caracteres do **SHA-256** do .dat. Se alguém gerar o hash do mesmo .dat (por exemplo, `certutil -hashfile registro.dat SHA256` no Windows), os caracteres devem coincidir: é a garantia de que o relatório se refere àquele arquivo;
+- num registro combinado, uma linha por registro de origem, com rótulo, hash, modo de alinhamento (onset, trigger ou absolute) e o ajuste em ms;
+- parâmetros de cálculo: estimador fasorial, janela em ciclos e grupos de tensão e de corrente; se a figura da aba **Impedância** estiver incluída, também a base (ohms primários ou secundários) e o k0.
+
+O relatório traz só o nome dos arquivos, nunca a pasta em que estão. O hash é calculado na hora de gerar o primeiro relatório do registro; em arquivos muito grandes isso pode levar alguns segundos.
 
 ## 10. Roteiros do dia a dia
 

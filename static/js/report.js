@@ -26,12 +26,43 @@ function saveStored(data) {
   }
 }
 
-function summaryParams() {
+function storedParams(id) {
   try {
-    return JSON.parse(localStorage.getItem("oscilo.analysis.params.summary") || "{}");
+    return JSON.parse(localStorage.getItem(`oscilo.analysis.params.${id}`) || "{}");
   } catch {
     return {};
   }
+}
+
+function summaryParams() {
+  return storedParams("summary");
+}
+
+/** Id da análise da aba aberta no painel (ou null). */
+function activeDockAnalysis() {
+  return document.querySelector("#analysis-dock:not(.hidden) .dock-tab.active")?.dataset.analysis || null;
+}
+
+/** Limite prático por figura (caracteres do data URL); o backend aceita até
+ * ~9 milhões de caracteres e 6 MB de PNG. Formas de onda densas (registro
+ * inteiro, muitos canais) em escala 2 passam disso. */
+const MAX_FIGURE_CHARS = 5_000_000;
+
+/** Oscilografia visível na maior escala (nitidez) que caiba no limite. */
+function captureViewFitting(ctx) {
+  let data = null;
+  for (const scale of [2, 1.5, 1.25, 1, 0.75]) {
+    data = ctx.captureView({ scale });
+    if (!data || data.length <= MAX_FIGURE_CHARS) return data;
+  }
+  return data; // ainda grande: o backend recusa com mensagem clara
+}
+
+/** Data/hora local do analista, ex.: 08/11/2026 14:32. */
+function localTimestamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /** Maior gráfico (canvas) da aba de análise aberta, sobre fundo branco. */
@@ -130,15 +161,19 @@ export function openReportDialog(ctx) {
     }
     errEl.textContent = "";
     const images = [];
+    let dockFigure = false;
     // figuras sempre no tema claro (impressão/Word)
     ctx.withLightTheme(() => {
       if (form.elements.fig_view.checked) {
-        const data = ctx.captureView();
+        const data = captureViewFitting(ctx);
         if (data) images.push({ caption: "Oscilografia – canais exibidos", data });
       }
       if (form.elements.fig_dock.checked) {
         const img = captureDock();
-        if (img) images.push(img);
+        if (img) {
+          images.push(img);
+          dockFigure = true;
+        }
       }
     });
     const fmt = action === "docx" ? "docx" : "html";
@@ -162,6 +197,11 @@ export function openReportDialog(ctx) {
       cursors: hasCursors ? { t1: c.c1, t2: c.c2, channels: ctx.selectedChannels().slice(0, 64) } : null,
       images,
       source_name: ctx.sourceName,
+      // rastreabilidade (bloco "Informações de processamento")
+      generated_at: localTimestamp(),
+      estimator: ctx.estimator || null,
+      window_cycles: Number(ctx.windowCycles) || null,
+      impedance_params: dockFigure && activeDockAnalysis() === "impedance" ? storedParams("impedance") : null,
     };
     const buttons = form.querySelectorAll(".dlg-actions button");
     buttons.forEach((b) => (b.disabled = true));

@@ -21,13 +21,34 @@ if (_params.has("token")) {
   history.replaceState(null, "", window.location.pathname);
 }
 
+/**
+ * Texto legível do erro devolvido pela API. O FastAPI usa `detail` como texto
+ * (HTTPException) ou como lista de erros de validação (422) – sem isto a lista
+ * aparecia como "[object Object]".
+ */
+export function apiErrorMessage(detail, fallback = "Erro desconhecido.") {
+  if (!detail) return fallback;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) => {
+        const loc = (d.loc || []).filter((p) => p !== "body").join(" › ");
+        if ((d.loc || []).includes("images")) return "Figura grande demais para o relatório.";
+        return loc ? `${loc}: ${d.msg}` : d.msg;
+      })
+      .filter((m, i, all) => m && all.indexOf(m) === i)
+      .join("\n") || fallback;
+  }
+  return detail.msg || JSON.stringify(detail);
+}
+
 export async function fetchJson(url, options = {}) {
   const headers = new Headers(options.headers || {});
   if (DESKTOP_TOKEN) headers.set("X-Oscilo-Token", DESKTOP_TOKEN);
   const res = await fetch(`${API}${url}`, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    throw new Error(apiErrorMessage(err.detail, res.statusText));
   }
   return res.json();
 }
@@ -140,7 +161,7 @@ export async function postForBlob(url, body) {
   const res = await fetch(`${API}${url}`, { method: "POST", headers, body: JSON.stringify(body) });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || res.statusText);
+    throw new Error(apiErrorMessage(err.detail, res.statusText));
   }
   return res.blob();
 }

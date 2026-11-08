@@ -1,6 +1,6 @@
 [package]
 name = "oscilo"
-version = "0.8.0"
+version = "0.8.1"
 description = "Oscilo – análise de oscilografias COMTRADE"
 edition = "2021"
 rust-version = "1.77"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 serde_json = "1"
 
 [profile.release]

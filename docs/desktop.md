@@ -65,6 +65,19 @@ O script gera em `release\` o instalador, o portátil (`…_x64-portable.zip`) e
 - empacota o servidor em `build\server`;
 - compila a janela.
 
+**Só a versão portátil, para testar localmente** (sem instalador nem pacote web; mais rápido):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\build-portable.ps1 -Run
+```
+
+Roda o `pytest`, empacota o servidor, compila a janela com `tauri build --no-bundle` e gera
+`release\Oscilo_<versão>_x64-portable.zip` e a pasta já extraída `release\Oscilo-portatil\`
+(`-Run` abre o programa no fim). Opções: `-SkipTests`; `-SkipServer` reaproveita
+`build\server` quando só o Rust mudou (a interface em `static\` vai dentro do servidor);
+`-Reinstall` reinstala as dependências Python. Se um Oscilo aberto a partir dessa pasta
+estiver rodando, o script o encerra antes de substituir os arquivos.
+
 A pasta de compilação do Rust tem vários GB. Por isso o script a coloca em `%LOCALAPPDATA%\oscilo-build`, **fora do OneDrive**.
 
 ## Desenvolver
@@ -81,6 +94,7 @@ A pasta de compilação do Rust tem vários GB. Por isso o script a coloca em `%
 | `desktop/splash/` | Tela de abertura enquanto o servidor inicia (e mensagens de erro) |
 | `src-tauri/` | Janela Tauri: inicia/encerra o servidor e concede à interface só o diálogo "Abrir" |
 | `scripts/build.ps1` | Build local no Windows (instalador, portátil e web) |
+| `scripts/build-portable.ps1` | Build local só da versão portátil, para testes |
 | `scripts/package_web.py` | Monta o pacote da versão web |
 | `web/` | `iniciar.bat`, `iniciar.sh` e `LEIA-ME.txt` do pacote web |
 | `backend/web_launcher.py` | Inicia a versão web e abre o navegador |

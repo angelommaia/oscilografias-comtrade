@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 COPY backend/ ./backend/
 COPY static/ ./static/
 COPY samples/ ./samples/
+COPY src-tauri/tauri.conf.json ./src-tauri/tauri.conf.json
 
 ENV ENV=production
 ENV PYTHONUNBUFFERED=1

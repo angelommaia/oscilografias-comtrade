@@ -29,6 +29,7 @@ import { removeGroup, runAnalysis } from "./analyses/api.js";
 import { openGroupDialog } from "./analyses/groups-dialog.js";
 import { ProtectionView } from "./protection/view.js";
 import { openReportDialog } from "./report.js";
+import { initAbout } from "./about.js";
 import { mergeInfoHtml, openMergeDialog } from "./merge.js";
 import { T as TH, getTheme, initTheme, setTheme } from "./core/theme.js";
 import { addGroup } from "./analyses/api.js";
@@ -151,6 +152,13 @@ const analysisCtx = {
   },
   get phasorConfig() {
     return state.phasorConfig;
+  },
+  /** Estimador e janela (ciclos) do painel de fasores – vão para o relatório. */
+  get estimator() {
+    return state.estimator;
+  },
+  get windowCycles() {
+    return state.windowCycles;
   },
   selectedAnalogChannels() {
     const analog = new Set((state.record?.analog_channels || []).map((c) => c.index));
@@ -547,6 +555,7 @@ function bindToolbar() {
     emitFixedCursors();
   });
   document.getElementById("open-report").addEventListener("click", () => openReportDialog(analysisCtx));
+  initAbout();
   document.getElementById("open-merge").addEventListener("click", openMerge);
   els.recordInfo.addEventListener("click", (e) => {
     if (e.target.closest(".mg-adjust")) openMerge();
