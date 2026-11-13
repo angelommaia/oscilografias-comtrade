@@ -63,9 +63,13 @@ fn url_encode(s: &str) -> String {
         .collect()
 }
 
-/// Arquivo .cfg passado na linha de comando ("Abrir com…" / arrastar no ícone).
+/// Arquivo passado na linha de comando ("Abrir com…" / arrastar no ícone):
+/// .cfg, .cff ou .zip.
 fn startup_file() -> Option<String> {
-    std::env::args().skip(1).find(|a| a.to_lowercase().ends_with(".cfg"))
+    std::env::args().skip(1).find(|a| {
+        let a = a.to_lowercase();
+        a.ends_with(".cfg") || a.ends_with(".cff") || a.ends_with(".zip")
+    })
 }
 
 fn server_command(app: &AppHandle) -> Result<Command, String> {
@@ -214,11 +218,14 @@ pub fn run() {
                 }
                 let origin = format!("http://127.0.0.1:{port}");
                 // A interface servida pelo backend só pode usar os diálogos "Abrir" e "Salvar"
-                // (o arquivo do relatório é gravado pelo backend no caminho escolhido) e abrir
-                // links https no navegador padrão do sistema (janela "Sobre o Oscilo").
+                // (o arquivo do relatório é gravado pelo backend no caminho escolhido), abrir
+                // links https no navegador padrão do sistema (janela "Sobre o Oscilo") e
+                // ouvir eventos (tauri://drag-drop traz os caminhos dos arquivos soltos).
                 let cap = CapabilityBuilder::new("local-server")
                     .remote(format!("{origin}/*"))
                     .window("main")
+                    .permission("core:event:allow-listen")
+                    .permission("core:event:allow-unlisten")
                     .permission("dialog:allow-open")
                     .permission("dialog:allow-save")
                     .permission_scoped(

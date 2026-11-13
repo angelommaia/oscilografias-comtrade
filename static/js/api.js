@@ -39,7 +39,7 @@ export function apiErrorMessage(detail, fallback = "Erro desconhecido.") {
       .filter((m, i, all) => m && all.indexOf(m) === i)
       .join("\n") || fallback;
   }
-  return detail.msg || JSON.stringify(detail);
+  return detail.message || detail.msg || JSON.stringify(detail);
 }
 
 export async function fetchJson(url, options = {}) {
@@ -48,7 +48,10 @@ export async function fetchJson(url, options = {}) {
   const res = await fetch(`${API}${url}`, { ...options, headers });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(apiErrorMessage(err.detail, res.statusText));
+    const error = new Error(apiErrorMessage(err.detail, res.statusText));
+    error.status = res.status;
+    error.detail = err.detail;
+    throw error;
   }
   return res.json();
 }
@@ -76,20 +79,25 @@ export async function loadFromPath(path) {
   });
 }
 
-/** Diálogo nativo de arquivo (Tauri). Retorna o caminho ou null. */
-export async function pickComtradeFile() {
+/** Diálogo nativo de arquivo (Tauri). Retorna a lista de caminhos ([] se cancelado).
+ * Aceita .cfg (o .dat é lido da mesma pasta), .cff e .zip; vários de uma vez. */
+export async function pickComtradeFiles({ title = "Abrir oscilografia COMTRADE" } = {}) {
   const invoke = window.__TAURI__?.core?.invoke || window.__TAURI_INTERNALS__?.invoke;
   if (!invoke) throw new Error("Diálogo nativo indisponível.");
   const res = await invoke("plugin:dialog|open", {
     options: {
-      title: "Abrir oscilografia COMTRADE",
-      multiple: false,
+      title,
+      multiple: true,
       directory: false,
-      filters: [{ name: "COMTRADE (.cfg)", extensions: ["cfg", "CFG"] }],
+      filters: [
+        { name: "COMTRADE (.cfg, .cff, .zip)", extensions: ["cfg", "CFG", "cff", "CFF", "zip", "ZIP"] },
+        { name: "Todos os arquivos", extensions: ["*"] },
+      ],
     },
   });
-  if (!res) return null;
-  return typeof res === "string" ? res : res.path || null;
+  if (!res) return [];
+  const list = Array.isArray(res) ? res : [res];
+  return list.map((r) => (typeof r === "string" ? r : r?.path)).filter(Boolean);
 }
 
 export async function listSamples() {
@@ -106,12 +114,11 @@ export async function fetchWaveform(recordId, channelIndices, viewRange, maxPoin
   return fetchJson(`/api/records/${recordId}/waveform?${params}`);
 }
 
-export async function fetchValueAtTime(recordId, channelIndices, timeS) {
-  const params = new URLSearchParams({
-    channels: channelIndices.join(","),
-    time_s: String(timeS),
-  });
-  return fetchJson(`/api/records/${recordId}/value-at-time?${params}`);
+export async function fetchValueAtTime(recordId, channelIndices, timeS, { times = null, mode = "inst", signal } = {}) {
+  const params = new URLSearchParams({ channels: channelIndices.join(","), mode });
+  if (times && times.length) params.set("times", times.map(String).join(","));
+  else params.set("time_s", String(timeS));
+  return fetchJson(`/api/records/${recordId}/value-at-time?${params}`, signal ? { signal } : undefined);
 }
 
 export function formatChannelValue(value, unit, kind) {

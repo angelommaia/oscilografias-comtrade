@@ -66,7 +66,7 @@ Guia completo: **[DEPLOY.md](../DEPLOY.md)** (GitHub + Railway passo a passo).
 3. **Exibir**: uma faixa por canal ou analógicos sobrepostos; faixas compactas (padrão, cabem em notebooks) ou altas; marcadores.
 4. **Fasores**: na aba Fasores da barra lateral, selecione grupos de tensão/corrente (ou crie um com "+ Grupo trifásico"), janela e estimador.
 5. **Análises**: o painel da direita abre só quando pedido, pelo menu **Análises** (Resumo, Eventos, Cursores, Fasores, Impedância, Harmônicos); ⤢ amplia e × fecha. Painel fechado não calcula nada. Posicione o cursor (Fasores) ou arraste na régua para selecionar um intervalo (Impedância/Harmônicos). `Esc` limpa a seleção.
-6. **Cursores C1/C2**: com o mouse sobre a oscilografia, tecle `1` ou `2` (ou use os botões C1/C2); arraste as linhas para ajustar. A análise **Cursores** mostra valores em cada um, Δt e estatísticas do trecho.
+6. **Cursores C1/C2**: com o mouse sobre a oscilografia, tecle `1` ou `2` (ou use os botões C1/C2); arraste as linhas para ajustar. Clique simples move o cursor comum; botão direito arrastando = zoom por retângulo; botão da roda (ou clique direito) = zoom anterior; Shift + roda = deslocar no tempo. A análise **Cursores** mostra valores em cada um, Δt e estatísticas do trecho.
 7. **Eventos e Resumo**: **Eventos** lista as mudanças dos canais digitais; **Resumo** caracteriza a perturbação (início, tipo, máximos, tempos de proteção). Clique num instante para levar o cursor até ele.
 8. **Juntar registros**: **Arquivo → Juntar registros…** – marque 2 a 6 oscilografias abertas (ou adicione arquivos no próprio diálogo), escolha o alinhamento (início da perturbação, trigger ou horário GPS) e, se preciso, um ajuste em ms por registro. Os canais ganham o rótulo do terminal ("TERMINAL_A: Ia…"). "Ajustar alinhamento…" na barra lateral refaz a junção mantendo os canais exibidos.
 9. **Fasores de duas pontas**: na análise Fasores, marque **2º terminal** e escolha os grupos V/I da outra ponta (num registro combinado o programa já sugere os do outro terminal). Os fasores da 2ª ponta aparecem com ′, traço fino e ponta vazada; a tabela mostra razão de módulo e Δ ângulo entre as pontas. Se o alinhamento não for por GPS, cada 1 ms de erro vale 21,6° (60 Hz).
@@ -129,7 +129,7 @@ static/js/plots/xyplot.js   # plano XY com zoom/pan reutilizável
 **Nova grandeza no tempo**: uma linha em `_METRICS` (`backend/phasor_analysis.py`).
 **Novo estimador**: uma função com `@register_estimator` em `dsp.py` (aparece automaticamente nos seletores).
 
-Testes: `cd backend && python -m pytest tests`.
+Testes: `cd backend && python -m pytest tests` e, para o frontend, `npm run test:js` (= `node --test static/js/tests/*.test.mjs`, Node 22+, sem pacotes).
 
 ## Estrutura
 
@@ -140,6 +140,7 @@ Oscilografias/
 │   ├── config.py
 │   ├── sample_catalog.py
 │   ├── comtrade_service.py
+│   ├── archive.py         # .cff, .zip, pastas e arquivos soltos → candidatos
 │   ├── phasor_analysis.py
 │   ├── analysis/          # núcleo de análises plugáveis
 │   ├── protection/        # funções de proteção (21, 78, 87T, 50/51/67)
@@ -160,19 +161,25 @@ Oscilografias/
 
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
-| POST | `/api/load/upload` | Upload multipart `.cfg` + `.dat` |
+| POST | `/api/load/upload` | Upload multipart `.cfg` + `.dat` (antigo; a interface usa `/api/load/files`) |
+| POST | `/api/load/files` | Web: multipart `files` (1–200) com `.cfg`/`.dat`, `.cff`, `.zip`. O nome do arquivo pode trazer subpastas (`Pasta/sub/A.cfg`, pasta solta) – saneadas por `archive.safe_relative` e preservadas, para separar registros de mesmo nome. Resposta: meta (1 registro) ou `{choose: {staging, title, notes, records: [{key, kind, name, folder, path, container, size, station, device, start, sample_rate_hz, samples, …}]}}` |
+| POST | `/api/load/path` | Desktop: `{path}` ou `{paths}` (.cfg, .cff, .zip, pastas). Mesma resposta |
+| POST | `/api/load/staged` | `{staging, keys}` (≤ 6) → `{records: [meta…]}`; listagem expirada (só as 3 últimas ficam) → **410** |
+| DELETE | `/api/load/staged/{staging}` | Descarta a listagem e os arquivos extraídos |
 | POST | `/api/load/sample` | Carrega exemplo `{ "sample_id": "pasta/arquivo" }` |
 | GET | `/api/samples` | Lista exemplos disponíveis (sem caminhos do servidor) |
 | GET | `/api/records/{id}/waveform` | Dados decimados para plotagem |
 | GET | `/api/records/{id}/derived/waveform` | Grandezas derivadas |
 | GET | `/api/records/{id}/derived/at-time` | Grandezas no cursor |
+| GET | `/api/records/{id}/value-at-time` | Valor dos canais em até 16 instantes: `channels`, `times` (ou `time_s`), `mode` = `inst` (padrão), `true_rms` ou `fund`; janela causal de 1 ciclo nominal, `null` se incompleta |
 | GET | `/api/records/{id}/phasor-config` | Grupos trifásicos, métricas e estimadores |
 | POST | `/api/records/{id}/groups` | Cria grupo trifásico manual `{quantity, label, a, b, c}` |
 | DELETE | `/api/records/{id}/groups/{group_id}` | Remove grupo manual |
 | GET | `/api/analyses` | Catálogo de análises com esquema de parâmetros |
 | POST | `/api/records/{id}/analyses/{analysis_id}` | Executa análise `{time_s, t_start, t_end, voltage_group, current_group, channels, params}` |
 | GET | `/api/records` | Registros abertos na sessão do servidor |
-| POST | `/api/merge` | Junta registros `{records: [{id, label, offset_ms}], mode: onset\|trigger\|absolute, reference}` |
+| POST | `/api/merge` | Junta registros `{records: [{id, label, offset_ms}], mode: absolute (padrão)\|onset\|trigger, reference, force}`. GPS incompatível → **409** `{message, problems, forceable}`; `force: true` junta assim mesmo (exceto data inválida) |
+| POST | `/api/merge/preview` | Mesmo corpo: candidatos de deslocamento (GPS/trigger/perturbação), compatibilidade do GPS e qualidade de tempo de cada registro, sem juntar |
 | POST | `/api/records/{id}/report` | Gera relatório `{format: docx\|html, title, analyst, comments, conclusion, sections, cursors, images}`; na versão desktop aceita `save_path`. Campos opcionais (rastreabilidade): `generated_at` (data/hora local já formatada), `estimator`, `window_cycles`, `impedance_params` (parâmetros da aba R-X, só quando a figura dela vai no relatório) |
 
 ### Oscilografias grandes
@@ -211,3 +218,52 @@ A janela Tauri não navega para fora do servidor local: `static/js/about.js` cha
 `plugin:opener|open_url`, e `lib.rs` concede `opener:allow-open-url` à origem
 `http://127.0.0.1:<porta>` só para URLs `https://*`, junto com
 `dialog:allow-open`/`allow-save`.
+
+## Abrir arquivos: .cff, .zip, pastas e arrastar e soltar
+
+`static/js/open-files.js` é o ponto único de abertura (menu, diálogo nativo,
+recentes, linha de comando, arraste). `openSources({files}|{paths}, purpose)`
+chama `/api/load/files` (web) ou `/api/load/path` (desktop); com vários
+registros mostra a lista de escolha (`#open-choose-dialog`) e carrega os
+escolhidos por `/api/load/staged`. `purpose: "add"` é usado pelo diálogo Juntar
+(`merge.js`), que marca os registros adicionados; com o Juntar aberto, arquivos
+soltos na janela vão para ele (`addToMergeDialog`).
+
+Arrastar e soltar:
+
+- **Web:** eventos HTML5; pastas lidas com `webkitGetAsEntry` (até 4 níveis,
+  400 arquivos), enviadas com o caminho relativo no nome do multipart.
+- **Desktop:** com o drag-drop do Tauri ligado, o WebView2 não entrega arquivos
+  externos ao HTML5. A interface ouve `tauri://drag-enter|drag-leave|drag-drop`
+  (o último traz os **caminhos**, nada é enviado); `lib.rs` concede
+  `core:event:allow-listen`/`allow-unlisten` à origem local. Arrastes internos
+  (faixas, canais, cursores) usam eventos de ponteiro, não HTML5.
+- Linha de comando ("Abrir com…"): `.cfg`, `.cff` ou `.zip`.
+
+## Faixas do gráfico
+
+`static/js/tracks-layout.js` (sem DOM, testado em `static/js/tests/`) guarda,
+por registro e durante a sessão, a lista ordenada de faixas
+`{id, channels: ["12", "derived:p"…], height, yZoom: {eixo: [lo, hi]}}`
+(JSON puro, pronto para "salvar sessão"). `syncLayout` acerta o layout com os
+canais exibidos (os checkboxes continuam sendo a fonte de "o que está aberto";
+novos entram no fim). Sobreposição só de analógicos, até `MAX_UNITS = 2`
+unidades-base (`baseUnit`: kV → V); zoom vertical por faixa e por eixo, sempre
+na unidade-base.
+
+Em `app.js`: `renderTrack` monta cada faixa (alça ⋮⋮, menu ⋯, legenda com ×,
+alça de altura); `drawTrackCanvas` desenha com `drawAnalogWaveform` (1 canal),
+`drawMultiAnalog` (sobrepostos, eixo da direita para a 2ª unidade) ou
+`drawDigitalWaveform`, e guarda em `canvas._axes` a escala usada (para o
+retângulo de zoom). `startLayoutDrag` trata o arraste do nome da faixa e dos
+canais da barra lateral (eventos de mouse, não HTML5 DnD: ver "Abrir arquivos"),
+com `dropTarget` (meio = sobrepor, bordas = inserir) e rolagem automática.
+Reordenar/sobrepor só redesenha (`relayout`); abrir um canal novo faz a consulta.
+
+### Barra lateral e rolagem
+
+- Lista de canais (`app.js`, `renderChannelLists`/`createChannelItem`): o nome não é `<label for>` – clique seleciona (`sideSel` por tipo, âncora para Shift), duplo clique ou checkbox abre/fecha (`setChannelsOpen`), Enter/Delete/botão `.sel-toggle` agem nos selecionados, retângulo a partir de área vazia (`startSideRect`). Registro combinado: `<details class="ch-group">` por rótulo de terminal (`merge.records[].label`, canais "RÓTULO: nome"), estado em `groupOpen`. Arrastar vários = fonte `{type: "channels", ids}`; entre faixas usa `insertChannelsEach` (uma faixa por canal).
+- `renderTracks` só reconstrói o DOM quando a estrutura muda (assinatura: faixas, canais, alturas, modo, tema, marcadores, linhas C1/C2) e preserva `scrollTop`; zoom e pan só redesenham.
+- Pan/zoom contínuos: `panRefreshView` com no máximo uma consulta em andamento (a próxima sai assim que a anterior termina) e redesenho imediato do que já está carregado.
+- `.tracks-container` usa `scrollbar-gutter: stable` e `--track-sbw` (largura medida da barra de rolagem) é descontada da régua e da barra de navegação: sem isso, com a barra do Windows (~17 px), os eixos de tempo da régua e das faixas ficavam desalinhados.
+

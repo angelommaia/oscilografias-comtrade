@@ -134,7 +134,9 @@ def test_merge_alignment(tmp_path):
     assert abs(int(a_on) - int(b_on)) <= 40  # ≤ ~10 ms (mesmo semiciclo)
 
     # manual soma ao alinhamento; modo horário usa o .cfg
-    meta2 = merge_records(store, [{"id": ma.id, "label": "A"}, {"id": mb.id, "label": "B", "offset_ms": 5}], "absolute", ma.id)
+    # (estes dois registros de 1 s começam 1,2 s afastados: GPS só com "juntar mesmo assim")
+    meta2 = merge_records(store, [{"id": ma.id, "label": "A"}, {"id": mb.id, "label": "B", "offset_ms": 5}],
+                          "absolute", ma.id, force=True)
     assert {r["label"]: r for r in meta2.merge["records"]}["B"]["shift_ms"] == pytest.approx(1205, abs=0.2)
 
     # análises funcionam no combinado

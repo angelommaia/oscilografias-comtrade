@@ -2,8 +2,12 @@
 única base de tempo, para ver e analisar tudo junto.
 
 Alinhamento (deslocamento de cada registro em relação ao de referência):
-* "absolute" – horário de início gravado em cada .cfg (registradores
-  sincronizados por GPS);
+* "absolute" – GPS / horário absoluto (padrão): horário de início gravado em
+  cada .cfg, convertido para UTC quando o fuso é informado (COMTRADE 2013).
+  Se os horários forem incompatíveis (sem sobreposição no tempo, início
+  distante mais que a duração do maior registro ou data inválida) o modo NÃO
+  é trocado sozinho: a junção é recusada com a explicação, e o usuário escolhe
+  outro modo ou confirma "juntar mesmo assim" (force);
 * "trigger"  – instantes de trigger coincidentes;
 * "onset"    – início da perturbação detectado em cada registro (variação de
   1 ciclo nas tensões e correntes): alinha registros sem sincronismo;
@@ -27,10 +31,21 @@ import numpy as np
 from analysis import AnalysisContext, RecordData
 from analysis.sequence import parse_timestamp, trigger_offset_s
 from provenance import SourceRef
+from timequality import summary as tq_summary
+from timequality import to_utc
 
 MAX_MERGED_VALUES = 120_000_000  # amostras × canais analógicos
 MAX_FS = 50_000.0
-MODES = ("onset", "trigger", "absolute")
+MODES = ("absolute", "onset", "trigger")
+DEFAULT_MODE = "absolute"
+
+
+class MergeIncompatible(ValueError):
+    """Horários absolutos incompatíveis para alinhar por GPS (sem troca automática de modo)."""
+
+    def __init__(self, message: str, problems: list[dict[str, Any]]):
+        super().__init__(message)
+        self.problems = problems
 
 _V_UNITS = {"v": 1.0, "kv": 1e3, "mv": 1e-3}
 _I_UNITS = {"a": 1.0, "ka": 1e3, "ma": 1e-3}
@@ -50,7 +65,15 @@ def _sustained(mask: np.ndarray, need: int) -> int | None:
 
 def detect_onset(data: RecordData) -> dict[str, Any] | None:
     """Início da perturbação (s, na escala do registro) pela variação de um ciclo
-    das tensões e correntes, cada canal normalizado pela própria amplitude."""
+    das tensões e correntes, cada canal normalizado pela própria amplitude.
+    O resultado fica em cache no registro (a pré-visualização chama várias vezes)."""
+    if "onset" in data.cache:
+        return data.cache["onset"]
+    data.cache["onset"] = _detect_onset(data)
+    return data.cache["onset"]
+
+
+def _detect_onset(data: RecordData) -> dict[str, Any] | None:
     ctx = AnalysisContext(data)
     n = max(int(round(ctx.fs / ctx.f0)), 4)
     total = ctx.n_samples
@@ -116,46 +139,110 @@ def _abs_start(data: RecordData) -> datetime | None:
     return start
 
 
+def _record_info(data: RecordData) -> dict[str, Any]:
+    tq = getattr(data.meta, "time_quality", None)
+    start = _abs_start(data)
+    t0, t1 = float(data.time[0]), float(data.time[-1])
+    return {
+        "trigger": trigger_offset_s(AnalysisContext(data)),
+        "onset": detect_onset(data),
+        "start": start,
+        "start_utc": to_utc(start, tq),
+        "tq": tq,
+        "t0": t0,
+        "t1": t1,
+        "duration": t1 - t0,
+    }
+
+
+def _absolute_shift(inf: dict[str, Any], ref: dict[str, Any]) -> tuple[float | None, bool]:
+    """Deslocamento pelo horário absoluto e se a conversão para UTC foi usada."""
+    if inf["start"] is None or ref["start"] is None:
+        return None, False
+    if inf["start_utc"] is not None and ref["start_utc"] is not None:
+        a, b, utc = inf["start_utc"], ref["start_utc"], True
+    else:
+        a, b, utc = inf["start"], ref["start"], False
+    return (a - b).total_seconds() - inf["t0"] + ref["t0"], utc
+
+
+def _absolute_status(inf: dict[str, Any], ref: dict[str, Any], shift: float | None,
+                     longest: float) -> tuple[str, str]:
+    """Compatibilidade dos horários absolutos com a referência."""
+    if inf["start"] is None:
+        return "invalid", "data/hora de início ausente ou inválida no .cfg"
+    if shift is None:
+        return "invalid", "a referência não tem data/hora válida no .cfg"
+    a0, a1 = inf["t0"] + shift, inf["t1"] + shift
+    overlap = min(a1, ref["t1"]) - max(a0, ref["t0"])
+    start_gap = abs(a0 - ref["t0"])
+    if start_gap > longest:
+        return "too_far", (f"os inícios diferem {start_gap:.3f} s, mais que a duração do maior registro "
+                           f"({longest:.3f} s)")
+    if overlap <= 0:
+        return "no_overlap", f"sem sobreposição no tempo com a referência (intervalo de {-overlap:.3f} s entre eles)"
+    return "ok", ""
+
+
 def compute_alignment(items: list[dict[str, Any]], datas: list[RecordData], mode: str,
-                      ref_index: int) -> tuple[list[dict[str, Any]], list[str]]:
+                      ref_index: int, force: bool = False, check: bool = True,
+                      ) -> tuple[list[dict[str, Any]], list[str]]:
     """Deslocamento (s) somado ao tempo de cada registro para a escala comum.
 
-    Calcula os três candidatos (horário, trigger, perturbação) para cada
-    registro – a interface mostra todos – e usa o do modo escolhido, caindo
-    para o trigger quando o candidato não existe."""
+    Calcula os três candidatos (GPS/horário, trigger, perturbação) para cada
+    registro – a interface mostra todos – e usa o do modo escolhido.
+    GPS incompatível → MergeIncompatible (com `check`), salvo `force` quando os
+    horários existem; data inválida nunca alinha por GPS. Perturbação não
+    encontrada → trigger, com nota (comportamento anterior). `check=False`
+    (pré-visualização) não levanta erro."""
     if mode not in MODES:
         raise ValueError(f"Modo de alinhamento inválido: {mode}")
     notes: list[str] = []
-    info = []
-    for data in datas:
-        info.append({
-            "trigger": trigger_offset_s(AnalysisContext(data)),
-            "onset": detect_onset(data),
-            "start": _abs_start(data),
-            "t0": float(data.time[0]),
-        })
+    info = [_record_info(d) for d in datas]
     ref = info[ref_index]
+    longest = max(x["duration"] for x in info)
 
-    def candidates(inf: dict[str, Any]) -> dict[str, float | None]:
-        out: dict[str, float | None] = {"absolute": None, "trigger": None, "onset": None}
-        if inf["start"] is not None and ref["start"] is not None:
-            sh = (inf["start"] - ref["start"]).total_seconds() - inf["t0"] + ref["t0"]
-            out["absolute"] = sh if abs(sh) <= 3600 else None
+    zones = {x["tq"].get("utc_offset_h") if x["tq"] else None for x in info}
+    if mode == "absolute" and None in zones and len(zones) > 1:
+        notes.append("Fuso horário informado só em parte dos arquivos: os horários foram comparados sem "
+                     "conversão para UTC (confira se todos usam o mesmo fuso).")
+
+    rows = []
+    problems = []
+    for i, (item, inf) in enumerate(zip(items, info)):
+        abs_shift, utc = _absolute_shift(inf, ref)
+        status, why = ("ok", "") if i == ref_index else _absolute_status(inf, ref, abs_shift, longest)
+        if i == ref_index and inf["start"] is None:
+            status, why = "invalid", "data/hora de início ausente ou inválida no .cfg"
         a = inf["trigger"] if inf["trigger"] is not None else inf["t0"]
         b = ref["trigger"] if ref["trigger"] is not None else ref["t0"]
-        out["trigger"] = b - a
-        if inf["onset"] is not None and ref["onset"] is not None:
-            out["onset"] = ref["onset"]["t"] - inf["onset"]["t"]
-        return out
+        cand = {
+            "absolute": abs_shift,
+            "trigger": b - a,
+            "onset": (ref["onset"]["t"] - inf["onset"]["t"]) if (inf["onset"] and ref["onset"]) else None,
+        }
+        if status != "ok":
+            problems.append({"label": item["label"], "status": status, "message": why})
+        rows.append((item, inf, cand, status, why, utc))
+
+    if mode == "absolute" and problems:
+        hard = [p for p in problems if p["status"] == "invalid"]
+        lines = "; ".join(f"{p['label']}: {p['message']}" for p in problems)
+        if check and (hard or not force):
+            hint = ("Escolha “Início da perturbação” (registros sem sincronismo) ou “Trigger”."
+                    if hard else "Use “Início da perturbação” ou confirme “Juntar mesmo assim”.")
+            raise MergeIncompatible(f"Horários absolutos (GPS) incompatíveis – {lines}. {hint}", problems)
+        if check:
+            notes.append(f"Alinhado por GPS mesmo com horários incompatíveis ({lines}): ângulos e tempos "
+                         "entre terminais não são confiáveis.")
 
     result = []
-    for i, (item, inf) in enumerate(zip(items, info)):
-        cand = candidates(inf)
-        used = mode if cand[mode] is not None else "trigger"
-        if used != mode and i != ref_index:
-            why = {"absolute": "data/hora do .cfg ausente, inválida ou muito distante",
-                   "onset": "início da perturbação não encontrado"}[mode]
-            notes.append(f"{item['label']}: {why} – alinhado pelo trigger.")
+    for i, (item, inf, cand, status, why, utc) in enumerate(rows):
+        used = mode
+        if cand[used] is None:
+            if mode == "onset" and i != ref_index:
+                notes.append(f"{item['label']}: início da perturbação não encontrado – alinhado pelo trigger.")
+            used = "trigger"  # (GPS sem horário só chega aqui na pré-visualização)
         shift = float(cand[used]) + float(item.get("offset_ms") or 0.0) / 1e3
         if i != ref_index and cand["trigger"] is not None and cand["onset"] is not None \
                 and abs(cand["trigger"] - cand["onset"]) > 0.05:
@@ -164,11 +251,8 @@ def compute_alignment(items: list[dict[str, Any]], datas: list[RecordData], mode
                 "diferentes – cada terminal pode ter visto um evento diferente primeiro (ex.: aberturas em instantes "
                 "distintos). Confira e ajuste manualmente.")
         clock = None
-        if cand["absolute"] is not None:
+        if i != ref_index and cand["absolute"] is not None:
             clock = (cand["absolute"] - (shift - float(item.get("offset_ms") or 0.0) / 1e3)) * 1e3
-        elif inf["start"] is not None and ref["start"] is not None:
-            raw = (inf["start"] - ref["start"]).total_seconds() - inf["t0"] + ref["t0"]
-            clock = (raw - shift) * 1e3
         result.append({
             "shift_s": shift,
             "mode_used": used,
@@ -176,9 +260,38 @@ def compute_alignment(items: list[dict[str, Any]], datas: list[RecordData], mode
             "onset_s": inf["onset"]["t"] if inf["onset"] else None,
             "onset_channel": inf["onset"]["channel"] if inf["onset"] else None,
             "trigger_s": inf["trigger"],
-            "clock_error_ms": clock if (clock is not None and i != ref_index) else None,
+            "clock_error_ms": clock,
+            "absolute_status": status,
+            "absolute_message": why,
+            "absolute_utc": utc,
+            "time_quality": inf["tq"],
+            "time_summary": tq_summary(inf["tq"]),
+            "start_time": inf["start"].isoformat(sep=" ", timespec="microseconds") if inf["start"] else None,
+            "forced": bool(mode == "absolute" and status != "ok" and force),
         })
     return result, notes
+
+
+def preview_alignment(store, items: list[dict[str, Any]], mode: str = DEFAULT_MODE,
+                      reference: str | None = None) -> dict[str, Any]:
+    """Candidatos de alinhamento, compatibilidade do GPS e qualidade de tempo de
+    cada registro – sem criar o registro combinado (diálogo "Juntar registros")."""
+    ids = [it["id"] for it in items]
+    datas = [store.get_data(i) for i in ids]
+    _unique_labels(items, datas)
+    ref_index = ids.index(reference) if reference in ids else 0
+    align, notes = compute_alignment(items, datas, mode, ref_index, check=False)
+    problems = [{"label": it["label"], "status": a["absolute_status"], "message": a["absolute_message"]}
+                for it, a in zip(items, align) if a["absolute_status"] != "ok"]
+    return {
+        "mode": mode,
+        "reference": ids[ref_index],
+        "absolute_ok": not problems,
+        "absolute_problems": problems,
+        "absolute_forceable": bool(problems) and all(p["status"] != "invalid" for p in problems),
+        "records": [{"id": i, "label": it["label"], **a} for i, it, a in zip(ids, items, align)],
+        "notes": notes,
+    }
 
 
 def _unique_labels(items: list[dict[str, Any]], datas: list[RecordData]) -> None:
@@ -190,8 +303,10 @@ def _unique_labels(items: list[dict[str, Any]], datas: list[RecordData]) -> None
         item["label"] = base if n == 0 else f"{base} ({n + 1})"
 
 
-def merge_records(store, items: list[dict[str, Any]], mode: str = "onset", reference: str | None = None):
-    """Cria e registra no `store` o registro combinado. Retorna o RecordMeta."""
+def merge_records(store, items: list[dict[str, Any]], mode: str = DEFAULT_MODE, reference: str | None = None,
+                  force: bool = False):
+    """Cria e registra no `store` o registro combinado. Retorna o RecordMeta.
+    GPS incompatível levanta MergeIncompatible (salvo `force`)."""
     from comtrade_service import ComtradeStore, RecordMeta  # import tardio (evita ciclo)
 
     if not 2 <= len(items) <= 6:
@@ -204,7 +319,7 @@ def merge_records(store, items: list[dict[str, Any]], mode: str = "onset", refer
         raise ValueError("Junte os registros originais (não um registro já combinado).")
     _unique_labels(items, datas)
     ref_index = ids.index(reference) if reference in ids else 0
-    align, notes = compute_alignment(items, datas, mode, ref_index)
+    align, notes = compute_alignment(items, datas, mode, ref_index, force=force)
 
     fs = min(max(float(d.meta.sample_rate_hz) for d in datas), MAX_FS)
     starts = [float(d.time[0]) + a["shift_s"] for d, a in zip(datas, align)]
@@ -283,6 +398,7 @@ def merge_records(store, items: list[dict[str, Any]], mode: str = "onset", refer
     labels = [it["label"] for it in items]
     spec = {
         "mode": mode,
+        "forced": bool(force and any(a.get("forced") for a in align)),
         "reference": ids[ref_index],
         "fs": fs,
         "records": [

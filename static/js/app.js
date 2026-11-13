@@ -1,19 +1,35 @@
 import {
   IS_DESKTOP,
   STARTUP_FILE,
-  loadFromPath,
-  pickComtradeFile,
+  pickComtradeFiles,
   fetchWaveform,
   fetchValueAtTime,
   formatTime,
   listSamples,
-  loadFromUpload,
   loadSample,
 } from "./api.js";
+import { initFileDrop, openSources } from "./open-files.js";
 import {
-  clearInstantValue,
-  instantValueHtml,
-  setInstantValue,
+  axesOf,
+  axisKey,
+  canOverlay,
+  createLayout,
+  detachChannel,
+  dropTarget,
+  insertChannels,
+  moveTrack,
+  overlayChannels,
+  overlayTrack,
+  insertChannelsEach,
+  splitTrack,
+  syncLayout,
+} from "./tracks-layout.js";
+import {
+  DEFAULT_VALUE_MODE,
+  VALUE_MODES,
+  baseUnit,
+  cursorLineCount,
+  cursorValuesHtml,
 } from "./instant-value.js";
 import {
   fetchDerivedAtTime,
@@ -30,13 +46,13 @@ import { openGroupDialog } from "./analyses/groups-dialog.js";
 import { ProtectionView } from "./protection/view.js";
 import { openReportDialog } from "./report.js";
 import { initAbout } from "./about.js";
-import { mergeInfoHtml, openMergeDialog } from "./merge.js";
+import { addToMergeDialog, isMergeDialogOpen, mergeInfoHtml, openMergeDialog } from "./merge.js";
 import { T as TH, getTheme, initTheme, setTheme } from "./core/theme.js";
 import { addGroup } from "./analyses/api.js";
 import {
   drawAnalogWaveform,
   drawDigitalWaveform,
-  drawOverlayAnalog,
+  drawMultiAnalog,
   interpolateValue,
 } from "./waveform.js";
 
@@ -59,13 +75,22 @@ function writePref(key, value) {
 const state = {
   record: null,
   selectedChannels: new Set(),
-  layout: "stacked",
+  // faixas por registro (tracks-layout.js): id do registro → layout
+  layouts: new Map(),
   density: readPref("oscilo.density", "compact"),
   onOpen: readPref("oscilo.onopen", "all"),
+  valueMode: VALUE_MODES.some((m) => m.id === readPref("oscilo.valuemode", ""))
+    ? readPref("oscilo.valuemode", DEFAULT_VALUE_MODE)
+    : DEFAULT_VALUE_MODE,
+  cursorValues: { key: "", byIndex: new Map() },
   viewStart: 0,
   viewEnd: 1,
   cursorTime: null,
+  // tempo sob o mouse nas faixas (só para as teclas 1/2; não desenha nem consulta nada)
+  pointerTime: null,
   selection: null,
+  // zooms por retângulo anteriores (clique direito sem arrastar volta um)
+  zoomHistory: [],
   markers: [],
   fixedCursors: { c1: null, c2: null },
   sourceName: "",
@@ -205,7 +230,10 @@ const analysisCtx = {
 
 const emitCursor = () => bus.emit("cursor", state.cursorTime);
 const emitSelection = () => bus.emit("selection", analysisCtx.selection);
-const emitFixedCursors = () => bus.emit("cursors", analysisCtx.fixedCursors);
+const emitFixedCursors = () => {
+  bus.emit("cursors", analysisCtx.fixedCursors);
+  updateCursorValues();
+};
 const emitFixedCursorsLater = debounce(emitFixedCursors, 150);
 const dock = new AnalysisDock(els.dock, analysisCtx);
 const protectionView = new ProtectionView(document.getElementById("protection-view"), analysisCtx);
@@ -216,7 +244,6 @@ const ruler = new TimelineRuler(els.rulerCanvas, (event) => {
   if (event.type === "cursor") {
     state.cursorTime = event.time;
     updateCursorLines();
-    updateInstantValues();
     updatePhasorPanel();
     updateStatus();
     emitCursor();
@@ -253,6 +280,7 @@ function init() {
   bindTheme();
   appendFixedCursorLines(els.rulerCanvas.parentElement);
   bindSideTabs();
+  bindSideLists();
   bindPhasorPanel();
   bindMenus();
   bindSidebarToggle();
@@ -399,9 +427,11 @@ function bindDock() {
   } catch {
     /* ignora */
   }
-  const open = readPref("oscilo.dock.open", "0") === "1";
-  dock.setOpen(open);
-  els.dock.classList.toggle("hidden", !open);
+  // o programa sempre abre com o painel de análises visível, na aba Resumo
+  // (o × continua fechando; fechado, não calcula)
+  dock.activateById("summary");
+  dock.setOpen(true);
+  els.dock.classList.remove("hidden");
   document.getElementById("dock-close").addEventListener("click", () => setDockOpen(false));
   document.getElementById("dock-expand").addEventListener("click", () => {
     els.dock.classList.toggle("expanded");
@@ -470,9 +500,17 @@ function bindMenus() {
   };
   setRadio("density", state.density);
   setRadio("onopen", state.onOpen);
+  setRadio("valuemode", state.valueMode);
+  document.querySelectorAll('input[name="valuemode"]').forEach((input) => input.addEventListener("change", () => {
+    state.valueMode = input.value;
+    writePref("oscilo.valuemode", state.valueMode);
+    updateCursorValues();
+  }));
   document.querySelectorAll('input[name="density"]').forEach((input) => input.addEventListener("change", () => {
     state.density = input.value;
     writePref("oscilo.density", state.density);
+    // trocar o modo global reaplica a todas as faixas analógicas
+    state.layouts.forEach((L) => L.tracks.forEach((t) => { t.height = null; }));
     refreshView();
   }));
   document.querySelectorAll('input[name="onopen"]').forEach((input) => input.addEventListener("change", () => {
@@ -502,7 +540,6 @@ function setCursorTime(time, { reveal = false } = {}) {
   }
   ruler.setCursor(time);
   updateCursorLines();
-  updateInstantValues();
   updatePhasorPanel();
   updateStatus();
   emitCursor();
@@ -510,6 +547,8 @@ function setCursorTime(time, { reveal = false } = {}) {
 
 function bindToolbar() {
   els.fileInput.addEventListener("change", onFileSelected);
+  bindTrackWheel();
+  initFileDrop(openFrom);
   els.sampleList.addEventListener("click", (e) => {
     const b = e.target.closest("[data-sample]");
     if (b) onSampleSelected(b.dataset.sample);
@@ -519,13 +558,6 @@ function bindToolbar() {
   document.getElementById("zoom-out").addEventListener("click", () => zoomBy(2));
   document.getElementById("zoom-fit").addEventListener("click", zoomFit);
   document.getElementById("zoom-selection").addEventListener("click", zoomToSelection);
-
-  document.querySelectorAll('input[name="layout"]').forEach((input) => {
-    input.addEventListener("change", () => {
-      state.layout = input.value;
-      refreshView();
-    });
-  });
 
   document.getElementById("add-marker").addEventListener("click", () => {
     if (state.cursorTime != null) addMarker(state.cursorTime);
@@ -556,7 +588,7 @@ function bindToolbar() {
   });
   document.getElementById("open-report").addEventListener("click", () => openReportDialog(analysisCtx));
   initAbout();
-  document.getElementById("open-merge").addEventListener("click", openMerge);
+  document.getElementById("open-merge").addEventListener("click", () => openMerge());
   els.recordInfo.addEventListener("click", (e) => {
     if (e.target.closest(".mg-adjust")) openMerge();
   });
@@ -569,7 +601,8 @@ function bindToolbar() {
     const typing = e.target.closest?.("input, textarea, select, [contenteditable]") || document.querySelector("dialog[open]");
     if (!typing && !e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "1" || e.key === "2")
         && !document.body.classList.contains("mode-prot")) {
-      setFixedCursor(e.key === "1" ? "c1" : "c2");
+      // na posição do mouse quando ele está sobre as faixas; senão, no cursor
+      setFixedCursor(e.key === "1" ? "c1" : "c2", state.pointerTime ?? undefined);
       e.preventDefault();
       return;
     }
@@ -654,23 +687,33 @@ async function onSampleSelected(sampleId) {
 
 async function onFileSelected(e) {
   const files = Array.from(e.target.files || []);
-  const cfg = files.find((f) => f.name.toLowerCase().endsWith(".cfg"));
-  const dat = files.find((f) => f.name.toLowerCase().endsWith(".dat"));
-  if (!cfg) {
-    alert("Selecione pelo menos o arquivo .cfg (e o .dat correspondente).");
+  els.fileInput.value = "";
+  if (files.length) openFrom({ files });
+}
+
+/** Ponto único de abertura: menu, diálogo nativo, recentes, linha de comando
+ * e arrastar e soltar. Um registro abre direto; vários mostram a lista (abrir
+ * um ou juntar os marcados). Com o diálogo Juntar aberto, os arquivos soltos
+ * são adicionados a ele. */
+async function openFrom(src) {
+  if (isMergeDialogOpen()) {
+    addToMergeDialog(src);
     return;
   }
-  const sizeMb = ((cfg.size + (dat?.size || 0)) / 1048576).toFixed(0);
-  setLoading(`Enviando e lendo ${escapeHtml(cfg.name)} (${sizeMb} MB)…`);
+  let res;
   try {
-    const record = await loadFromUpload(cfg, dat);
-    setRecord(record, cfg.name);
+    res = await openSources({ ...src, purpose: "open", busy: setLoading });
   } catch (err) {
-    alert(`Erro ao carregar: ${err.message}`);
-  } finally {
-    setLoading(null);
-    els.fileInput.value = "";
+    const where = src.paths?.length === 1 ? ` ${src.paths[0]}` : "";
+    alert(`Erro ao abrir${where}:\n${err.message}`);
+    return;
   }
+  if (!res || !res.records.length) return;
+  const [first] = res.records;
+  setRecord(first, res.sourcePath || first.source_name);
+  if (IS_DESKTOP && res.sourcePath) pushRecent(res.sourcePath);
+  if (IS_DESKTOP) document.title = `${(res.sourcePath || first.source_name || "").split(/[\\/]/).pop()} – Oscilo`;
+  if (res.action === "merge" && res.records.length > 1) openMerge({ preselect: res.records.map((r) => r.id) });
 }
 
 // ---------------------------------------------------------------------------
@@ -705,19 +748,8 @@ function renderRecent() {
   document.getElementById("recent-block").classList.toggle("hidden", !list.length);
 }
 
-async function openLocalPath(path) {
-  if (!path) return;
-  setLoading(`Lendo ${escapeHtml(path.split(/[\\/]/).pop())}…`);
-  try {
-    const record = await loadFromPath(path);
-    setRecord(record, path);
-    pushRecent(record.source_path || path);
-    document.title = `${path.split(/[\\/]/).pop()} – Oscilo`;
-  } catch (err) {
-    alert(`Erro ao abrir ${path}:\n${err.message}`);
-  } finally {
-    setLoading(null);
-  }
+function openLocalPath(path) {
+  if (path) openFrom({ paths: [path] });
 }
 
 function bindDesktop() {
@@ -729,8 +761,8 @@ function bindDesktop() {
   document.querySelector("#menu-file .file-btn").classList.add("hidden");
   btn.addEventListener("click", async () => {
     try {
-      const path = await pickComtradeFile();
-      if (path) openLocalPath(path);
+      const paths = await pickComtradeFiles();
+      if (paths.length) openFrom({ paths });
     } catch (err) {
       console.warn("Diálogo nativo:", err);
       els.fileInput.click(); // alternativa: upload
@@ -772,6 +804,10 @@ function setRecord(record, sourceName = "", { keep = false } = {}) {
     && prev.analog_channels.length === record.analog_channels.length
     && prev.digital_channels.length === record.digital_channels.length;
   const keptChannels = sameLayout ? new Set(state.selectedChannels) : null;
+  // junção refeita (mesmos canais): mantém ordem, sobreposições e alturas
+  if (sameLayout && state.layouts.has(prev.id) && !state.layouts.has(record.id)) {
+    state.layouts.set(record.id, structuredClone(state.layouts.get(prev.id)));
+  }
   state.record = record;
   state.sourceName = record.source_path || sourceName || record.source_name || "";
   state.selectedChannels.clear();
@@ -783,6 +819,7 @@ function setRecord(record, sourceName = "", { keep = false } = {}) {
     state.viewStart = 0;
     state.viewEnd = record.duration_s || 1;
     state.selection = null;
+    state.zoomHistory = [];
   } else {
     state.viewEnd = Math.min(state.viewEnd, record.duration_s || 1);
   }
@@ -807,9 +844,10 @@ function setRecord(record, sourceName = "", { keep = false } = {}) {
   }
 }
 
-function openMerge() {
+function openMerge({ preselect = null } = {}) {
   openMergeDialog({
     current: state.record,
+    preselect,
     onMerged: (meta) => setRecord(meta, meta.source_name, { keep: !!state.record?.merge }),
   });
 }
@@ -951,42 +989,233 @@ function renderRecordInfo() {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// Barra lateral: lista de canais (seções por terminal no registro combinado,
+// seleção múltipla, abrir/fechar selecionados, arrastar para o gráfico)
+// ---------------------------------------------------------------------------
+const sideSel = { analog: new Set(), digital: new Set() };
+const sideAnchor = { analog: null, digital: null };
+const groupOpen = new Map(); // "kind|rótulo" → aberto? (vale para a sessão)
+
 function renderChannelLists() {
   els.analogList.innerHTML = "";
   els.digitalList.innerHTML = "";
+  sideSel.analog.clear();
+  sideSel.digital.clear();
+  sideAnchor.analog = sideAnchor.digital = null;
   if (!state.record) return;
-
-  for (const ch of state.record.analog_channels) {
-    els.analogList.appendChild(createChannelItem(ch));
-  }
-  for (const ch of state.record.digital_channels) {
-    els.digitalList.appendChild(createChannelItem(ch));
-  }
+  fillChannelList(els.analogList, "analog", state.record.analog_channels);
+  fillChannelList(els.digitalList, "digital", state.record.digital_channels);
   document.getElementById("count-analog").textContent = `(${state.record.analog_channels.length})`;
   document.getElementById("count-digital").textContent = `(${state.record.digital_channels.length})`;
+  updateSideSelectionUi();
 }
 
-function createChannelItem(ch) {
+/** No registro combinado os canais chegam como "RÓTULO: nome": uma seção
+ * retrátil por terminal. Num registro comum, lista simples. */
+function fillChannelList(list, kind, channels) {
+  const labels = (state.record.merge?.records || []).map((r) => r.label).filter(Boolean);
+  if (labels.length < 2) {
+    channels.forEach((ch) => list.appendChild(createChannelItem(ch)));
+    return;
+  }
+  const groups = new Map(labels.map((l) => [l, []]));
+  const other = [];
+  for (const ch of channels) {
+    const l = labels.find((x) => ch.name.startsWith(`${x}: `));
+    if (l) groups.get(l).push(ch);
+    else other.push(ch);
+  }
+  if (other.length) groups.set("Outros", other);
+  for (const [label, chans] of groups) {
+    if (!chans.length) continue;
+    const key = `${kind}|${label}`;
+    const det = document.createElement("details");
+    det.className = "ch-group";
+    det.open = groupOpen.get(key) ?? true;
+    det.innerHTML = `<summary><span class="chg-label">${escapeHtml(label)}</span> <span class="chg-count">(${chans.length})</span></summary>`;
+    det.addEventListener("toggle", () => groupOpen.set(key, det.open));
+    chans.forEach((ch) => det.appendChild(createChannelItem(ch, `${label}: `)));
+    list.appendChild(det);
+  }
+}
+
+function createChannelItem(ch, prefix = "") {
   const div = document.createElement("div");
   div.className = "channel-item";
   div.dataset.index = String(ch.index);
   div.dataset.kind = ch.kind;
   div.dataset.search = ch.name.toLowerCase();
-  const id = `ch-${ch.index}`;
+  const shown = prefix && ch.name.startsWith(prefix) ? ch.name.slice(prefix.length) : ch.name;
+  // o nome não é <label for>: clicar nele seleciona; o checkbox abre/fecha
   div.innerHTML = `
-    <input type="checkbox" id="${id}" data-index="${ch.index}" />
-    <label for="${id}">
-      ${escapeHtml(ch.name)}
+    <input type="checkbox" data-index="${ch.index}" aria-label="Abrir ${escapeHtml(ch.name)}" />
+    <label title="${escapeHtml(ch.name)}">
+      ${escapeHtml(shown)}
       ${ch.unit ? `<span class="unit"> (${escapeHtml(ch.unit)})</span>` : ""}
     </label>
   `;
+  div.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || e.target.closest("input")) return;
+    e.preventDefault(); // sem seleção de texto
+    div.closest(".channel-list")?.focus({ preventScroll: true }); // Enter/Delete valem logo após o clique
+    // arrastar um item selecionado leva todos os selecionados (na ordem da lista)
+    const kind = ch.kind;
+    const ids = sideSel[kind].has(ch.index) && sideSel[kind].size > 1
+      ? visibleItems(kind).filter((it) => sideSel[kind].has(Number(it.dataset.index))).map((it) => it.dataset.index)
+      : [String(ch.index)];
+    const label = ids.length > 1 ? `${ids.length} canais` : ch.name;
+    startLayoutDrag(e, ids.length > 1 ? { type: "channels", ids } : { type: "channel", id: String(ch.index) }, label);
+  });
+  div.addEventListener("click", (e) => {
+    if (e.target.closest("input")) return;
+    selectSideItem(ch.kind, ch.index, { toggle: e.ctrlKey || e.metaKey, range: e.shiftKey });
+  });
+  div.addEventListener("dblclick", (e) => {
+    if (e.target.closest("input")) return;
+    setChannelsOpen([ch.index], !state.selectedChannels.has(ch.index));
+  });
+  div.title = "Clique seleciona (Ctrl/Shift para vários) · duplo clique ou checkbox abre/fecha · arraste para o gráfico";
   div.querySelector("input").addEventListener("change", (e) => {
-    if (e.target.checked) state.selectedChannels.add(ch.index);
-    else state.selectedChannels.delete(ch.index);
-    refreshView();
-    bus.emit("channels");
+    setChannelsOpen([ch.index], e.target.checked);
   });
   return div;
+}
+
+function visibleItems(kind) {
+  const list = kind === "analog" ? els.analogList : els.digitalList;
+  // filtrados pela busca ou dentro de seção recolhida não contam
+  return Array.from(list.querySelectorAll(".channel-item")).filter((it) => it.style.display !== "none" && !it.closest("details:not([open])"));
+}
+
+function selectSideItem(kind, index, { toggle = false, range = false } = {}) {
+  const sel = sideSel[kind];
+  if (range && sideAnchor[kind] != null) {
+    const items = visibleItems(kind).map((it) => Number(it.dataset.index));
+    const a = items.indexOf(sideAnchor[kind]);
+    const b = items.indexOf(index);
+    if (a >= 0 && b >= 0) {
+      if (!toggle) sel.clear();
+      items.slice(Math.min(a, b), Math.max(a, b) + 1).forEach((i) => sel.add(i));
+    }
+  } else if (toggle) {
+    if (sel.has(index)) sel.delete(index);
+    else sel.add(index);
+    sideAnchor[kind] = index;
+  } else {
+    sel.clear();
+    sel.add(index);
+    sideAnchor[kind] = index;
+  }
+  updateSideSelectionUi();
+}
+
+function updateSideSelectionUi() {
+  for (const kind of ["analog", "digital"]) {
+    const list = kind === "analog" ? els.analogList : els.digitalList;
+    list.querySelectorAll(".channel-item").forEach((it) => {
+      it.classList.toggle("selected", sideSel[kind].has(Number(it.dataset.index)));
+    });
+    const btn = list.parentElement.querySelector(".sel-toggle");
+    if (btn) {
+      const ids = [...sideSel[kind]];
+      btn.disabled = !ids.length;
+      const anyClosed = ids.some((i) => !state.selectedChannels.has(i));
+      btn.textContent = !ids.length ? "Abrir/fechar selecionados" : `${anyClosed ? "Abrir" : "Fechar"} ${ids.length} selecionado${ids.length > 1 ? "s" : ""}`;
+    }
+  }
+}
+
+/** Abre ou fecha canais (checkboxes, duplo clique, Enter/Delete, botão). */
+function setChannelsOpen(indices, open) {
+  let changed = false;
+  indices.forEach((i) => {
+    if (open && !state.selectedChannels.has(i)) { state.selectedChannels.add(i); changed = true; }
+    if (!open && state.selectedChannels.has(i)) { state.selectedChannels.delete(i); changed = true; }
+  });
+  syncChannelCheckboxes();
+  updateSideSelectionUi();
+  if (!changed) return;
+  refreshView();
+  bus.emit("channels");
+}
+
+/** Selecionados: se algum estiver fechado, abre todos; senão, fecha todos. */
+function toggleSelectedOpen(kind) {
+  const ids = [...sideSel[kind]];
+  if (!ids.length) return;
+  setChannelsOpen(ids, ids.some((i) => !state.selectedChannels.has(i)));
+}
+
+function bindSideLists() {
+  for (const [kind, list] of [["analog", els.analogList], ["digital", els.digitalList]]) {
+    list.tabIndex = 0;
+    list.setAttribute("aria-multiselectable", "true");
+    list.addEventListener("keydown", (e) => {
+      if (e.target.closest("input")) return;
+      if (e.key === "Enter") {
+        setChannelsOpen([...sideSel[kind]], true);
+        e.preventDefault();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        setChannelsOpen([...sideSel[kind]], false);
+        e.preventDefault();
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        visibleItems(kind).forEach((it) => sideSel[kind].add(Number(it.dataset.index)));
+        updateSideSelectionUi();
+        e.preventDefault();
+      } else if (e.key === "Escape") {
+        sideSel[kind].clear();
+        updateSideSelectionUi();
+      }
+    });
+    // retângulo de seleção a partir de área vazia da lista
+    list.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || e.target.closest(".channel-item, summary")) return;
+      startSideRect(e, kind, list);
+    });
+    const actions = list.parentElement.querySelector(".list-actions");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "link-btn sel-toggle";
+    btn.title = "Abre os selecionados (ou fecha, se todos já estiverem abertos) · Enter abre, Delete fecha";
+    btn.addEventListener("click", () => toggleSelectedOpen(kind));
+    actions?.appendChild(btn);
+  }
+  updateSideSelectionUi();
+}
+
+function startSideRect(e, kind, list) {
+  e.preventDefault();
+  list.focus({ preventScroll: true });
+  const additive = e.ctrlKey || e.metaKey;
+  const base = additive ? new Set(sideSel[kind]) : new Set();
+  const x0 = e.clientX;
+  const y0 = e.clientY;
+  const box = document.createElement("div");
+  box.className = "zoom-rect side-rect";
+  document.body.appendChild(box);
+  const onMove = (ev) => {
+    const lr = list.getBoundingClientRect();
+    const x1 = Math.min(Math.max(ev.clientX, lr.left), lr.right);
+    const y1 = Math.min(Math.max(ev.clientY, lr.top), lr.bottom);
+    const top = Math.min(y0, y1);
+    const bottom = Math.max(y0, y1);
+    Object.assign(box.style, { left: `${Math.min(x0, x1)}px`, top: `${top}px`, width: `${Math.abs(x1 - x0)}px`, height: `${bottom - top}px` });
+    const sel = new Set(base);
+    visibleItems(kind).forEach((it) => {
+      const r = it.getBoundingClientRect();
+      if (r.bottom >= top && r.top <= bottom && bottom - top > 3) sel.add(Number(it.dataset.index));
+    });
+    sideSel[kind] = sel;
+    updateSideSelectionUi();
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    box.remove();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
 
 function filterChannelList(kind) {
@@ -1091,6 +1320,7 @@ function syncChannelCheckboxes() {
   document.querySelectorAll(".channel-item input").forEach((input) => {
     input.checked = state.selectedChannels.has(Number(input.dataset.index));
   });
+  updateSideSelectionUi();
 }
 
 function computeMaxPoints() {
@@ -1110,7 +1340,6 @@ function applyViewChrome() {
   updateMarkerLines();
   updateFixedCursorLines();
   updateSelectionOverlay();
-  updateInstantValues();
   updatePhasorPanel();
   updateStatus();
   updateNavScroll();
@@ -1129,7 +1358,7 @@ async function refreshView(options = {}) {
 
   if (!derivedOnly && (!state.record || (!hasChannels && !hasDerived))) {
     els.emptyState.style.display = "flex";
-    els.tracksContainer.querySelectorAll(".track-row, .overlay-stack").forEach((el) => el.remove());
+    els.tracksContainer.querySelectorAll(".track-row").forEach((el) => el.remove());
     state.waveformCache = null;
     ruler.setView(0, 1);
     ruler.draw();
@@ -1200,157 +1429,253 @@ async function refreshView(options = {}) {
   }
 }
 
-function renderTracks() {
-  els.tracksContainer.querySelectorAll(".track-row, .overlay-stack").forEach((el) => el.remove());
-  const channels = state.waveformCache?.channels || [];
-  if (!channels.length) return;
+// ---------------------------------------------------------------------------
+// Faixas (modelo em tracks-layout.js): uma lista ordenada por registro; cada
+// faixa tem 1 canal ou vários analógicos sobrepostos (até 2 unidades).
+// ---------------------------------------------------------------------------
+function currentLayout() {
+  if (!state.record) return createLayout();
+  let L = state.layouts.get(state.record.id);
+  if (!L) {
+    L = createLayout();
+    state.layouts.set(state.record.id, L);
+  }
+  return L;
+}
 
-  if (state.layout === "overlay") {
-    renderOverlayTracks(channels);
-  } else {
-    channels.forEach((ch) => renderStackedTrack(ch));
+/** {kind, unit, name} de um canal pelo id ("12" ou "derived:…"): primeiro os
+ * dados exibidos, depois as listas do registro (canal ainda não aberto). */
+function channelMeta(id) {
+  const key = String(id);
+  const ch = state.waveformCache?.channels?.find((c) => String(c.index) === key);
+  if (ch) return { kind: ch.kind, unit: ch.unit, name: ch.name };
+  const rec = state.record;
+  const found = rec && [...rec.analog_channels, ...rec.digital_channels].find((c) => String(c.index) === key);
+  return found ? { kind: found.kind, unit: found.unit, name: found.name } : { kind: "derived", unit: "", name: key };
+}
+
+function trackKind(track) {
+  return channelMeta(track.channels[0]).kind;
+}
+
+/** Monta as faixas. Se a estrutura não mudou (mesmas faixas, canais, alturas
+ * e modo), mantém o DOM e só os canvases são redesenhados – zoom e pan não
+ * reconstroem nada nem mexem na rolagem vertical. */
+let lastTrackSig = "";
+function renderTracks({ force = false } = {}) {
+  const channels = state.waveformCache?.channels || [];
+  const L = currentLayout();
+  if (channels.length) syncLayout(L, channels.map((c) => String(c.index)));
+  const sig = [
+    state.record?.id, state.density, els.tracksContainer.clientHeight, getTheme(),
+    state.markers.map((m) => m.label).join(","),
+    cursorLineCount(state.fixedCursors.c1 != null, state.fixedCursors.c2 != null),
+    ...L.tracks.map((t) => `${t.id}:${t.channels.join(",")}:${t.height || ""}`),
+  ].join("|");
+  const rows = els.tracksContainer.querySelectorAll(".track-row");
+  if (!force && channels.length && sig === lastTrackSig && rows.length === L.tracks.length) return;
+  const scroll = els.tracksContainer.scrollTop;
+  rows.forEach((el) => el.remove());
+  lastTrackSig = "";
+  if (!channels.length) return;
+  const byId = new Map(channels.map((c) => [String(c.index), c]));
+  L.tracks.forEach((t) => renderTrack(t, byId));
+  lastTrackSig = sig;
+  els.tracksContainer.scrollTop = scroll; // reordenar/abrir não volta ao topo
+  syncScrollbarGutter();
+  lastCvLines = cursorLineCount(state.fixedCursors.c1 != null, state.fixedCursors.c2 != null);
+  updateCursorValues();
+}
+
+/** Desconta na régua e na barra de navegação a largura da barra de rolagem
+ * vertical das faixas (Windows: ~17 px), para os eixos de tempo coincidirem. */
+function syncScrollbarGutter() {
+  const tc = els.tracksContainer;
+  const sb = Math.max(0, tc.offsetWidth - tc.clientWidth);
+  const cur = document.documentElement.style.getPropertyValue("--track-sbw");
+  if (cur !== `${sb}px`) {
+    document.documentElement.style.setProperty("--track-sbw", `${sb}px`);
+    ruler.draw();
   }
 }
 
-/** Altura das faixas: compactas cabem em notebooks; com poucos analógicos, eles
- * dividem a altura disponível. */
-function trackHeight(ch) {
-  const compact = state.density === "compact";
-  if (ch.kind === "digital") return compact ? 22 : 40;
-  const chans = state.waveformCache?.channels || [];
-  const nAnalog = chans.filter((c) => c.kind !== "digital").length || 1;
-  const nDigital = chans.length - nAnalog;
-  const avail = els.tracksContainer.clientHeight - nDigital * (compact ? 23 : 41) - 4;
-  const fill = Math.floor(avail / nAnalog) - 1;
-  const [lo, hi] = compact ? [64, 160] : [110, 220];
-  return Math.max(lo, Math.min(hi, fill));
+/** Reconstrói as faixas com os dados já carregados (reordenar, sobrepor,
+ * retirar): só redesenho, nenhuma consulta. */
+function relayout() {
+  renderTracks({ force: true });
+  redrawAllCanvases();
 }
 
-function renderStackedTrack(ch) {
+const TRACK_COLORS = () => TH.palette;
+
+/** Altura das faixas: compactas cabem em notebooks; com poucas faixas
+ * analógicas, elas dividem a altura disponível. Digitais: sempre compactas. */
+function trackHeight(track) {
+  const kind = trackKind(track);
+  if (kind === "digital") return DIGITAL_TRACK_H;
+  const n = track.channels.length;
+  const lines = cursorLineCount(state.fixedCursors.c1 != null, state.fixedCursors.c2 != null);
+  const compact = state.density === "compact";
+  // nome (até 2 linhas) + unidade + linhas de valor (C1 · C2 · Δ); sobreposta: nome + valores por canal
+  let lo = compact ? (lines > 1 ? 92 : 66) : (lines > 1 ? 120 : 110);
+  if (n > 1) lo = Math.max(lo, 26 + n * (14 + lines * 13));
+  if (track.height) return Math.max(track.height, 40);
+  const L = currentLayout();
+  const nDigital = L.tracks.filter((t) => trackKind(t) === "digital").length;
+  const nAnalog = (L.tracks.length - nDigital) || 1;
+  const avail = els.tracksContainer.clientHeight - nDigital * (DIGITAL_TRACK_H + 1) - 4;
+  const fill = Math.floor(avail / nAnalog) - 1;
+  const hi = compact ? 160 : 220;
+  return Math.max(lo, Math.min(Math.max(hi, lo), fill));
+}
+const DIGITAL_TRACK_H = 22;
+
+function renderTrack(track, byId) {
+  const chans = track.channels.map((id) => byId.get(id)).filter(Boolean);
+  if (!chans.length) return;
+  const first = chans[0];
+  const multi = chans.length > 1;
+  const colors = TRACK_COLORS();
   const row = document.createElement("div");
   row.className = "track-row";
-  if (ch.kind === "derived") row.classList.add("derived");
-  row.dataset.channelIndex = String(ch.index);
+  if (first.kind === "derived") row.classList.add("derived");
+  if (first.kind === "digital") row.classList.add("digital-row");
+  if (multi) row.classList.add("multi");
+  row.dataset.trackId = track.id;
+  row.dataset.title = chans.map((c) => c.name).join(" + ");
 
   const gutter = document.createElement("div");
   gutter.className = "track-gutter-panel";
-  const metaLabel = ch.kind === "derived" ? "calculado" : ch.kind === "digital" ? "" : escapeHtml(ch.unit || "");
-  if (ch.kind === "digital") {
+  const drag = `<span class="tg-drag" title="Arraste para mudar a ordem ou soltar sobre outra faixa para sobrepor">⋮⋮</span>`;
+  const menu = `<button type="button" class="tg-menu" title="Opções da faixa" aria-label="Opções da faixa">⋯</button>`;
+  if (first.kind === "digital") {
     gutter.classList.add("digital");
-    gutter.innerHTML = `<div class="name" title="${escapeHtml(ch.name)}">${escapeHtml(ch.name)}</div>${instantValueHtml(ch.index)}`;
-  } else {
+    gutter.innerHTML = `${drag}<div class="name tg-grip" title="${escapeHtml(first.name)}">${escapeHtml(first.name)}</div>${cvHtml(first.index)}${menu}`;
+  } else if (!multi) {
+    const metaLabel = first.kind === "derived" ? "calculado" : escapeHtml(first.unit || "");
     gutter.innerHTML = `
-      <div class="name" title="${escapeHtml(ch.name)}">${escapeHtml(ch.name)}</div>
-      <div class="meta"><span>${metaLabel}</span>${instantValueHtml(ch.index)}</div>`;
+      <div class="tg-head">${drag}<div class="name tg-grip" title="${escapeHtml(first.name)}">${escapeHtml(first.name)}</div>${menu}</div>
+      <div class="meta"><span>${metaLabel}</span></div>
+      ${cvHtml(first.index)}`;
+  } else {
+    gutter.classList.add("multi");
+    gutter.innerHTML = `
+      <div class="tg-head">${drag}<div class="name tg-grip" title="${escapeHtml(row.dataset.title)}">${chans.length} canais sobrepostos</div>${menu}</div>
+      ${chans.map((c, i) => `<div class="tg-ch"><span class="sw" style="background:${colors[i % colors.length]}"></span><span class="tg-ch-name" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</span><span class="unit">${escapeHtml(c.unit || "")}</span></div>${cvHtml(c.index)}`).join("")}`;
   }
 
   const wrap = document.createElement("div");
   wrap.className = "track-canvas-wrap";
-  wrap.style.height = `${trackHeight(ch)}px`;
-
+  wrap.style.height = `${trackHeight(track)}px`;
   const canvas = document.createElement("canvas");
-  canvas.dataset.channelIndex = String(ch.index);
+  canvas.dataset.trackId = track.id;
   wrap.appendChild(canvas);
-
   const cursor = document.createElement("div");
   cursor.className = "cursor-line";
   wrap.appendChild(cursor);
-
-  for (const marker of state.markers) {
-    wrap.appendChild(createMarkerLine(marker));
-  }
+  for (const marker of state.markers) wrap.appendChild(createMarkerLine(marker));
   appendFixedCursorLines(wrap);
+  if (multi) {
+    const legend = document.createElement("div");
+    legend.className = "track-legend";
+    legend.innerHTML = chans.map((c, i) => `<span class="lg-item"><span class="sw" style="background:${colors[i % colors.length]}"></span>${escapeHtml(c.name)}<button type="button" class="lg-x" data-detach="${escapeHtml(String(c.index))}" title="Retirar ${escapeHtml(c.name)} desta faixa (volta a ter faixa própria)">×</button></span>`).join("");
+    legend.addEventListener("mousedown", (e) => e.stopPropagation());
+    legend.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-detach]");
+      if (!b) return;
+      detachChannel(currentLayout(), track.id, b.dataset.detach);
+      relayout();
+    });
+    wrap.appendChild(legend);
+  }
+  if (first.kind !== "digital") {
+    const handle = document.createElement("div");
+    handle.className = "track-resize";
+    handle.title = "Arraste para mudar a altura desta faixa · duplo clique volta à altura padrão";
+    handle.addEventListener("mousedown", (e) => startTrackResize(e, track, wrap));
+    handle.addEventListener("dblclick", (e) => {
+      e.stopPropagation(); // não é o duplo clique da faixa (escala vertical)
+      if (track.height == null) return;
+      track.height = null; // volta à altura padrão do modo compacto/alto
+      relayout();
+    });
+    wrap.appendChild(handle);
+  }
 
   bindTrackInteraction(wrap);
+  wrap.addEventListener("dblclick", (e) => {
+    if (e.target.closest(".track-legend, .track-resize, .fixed-cursor")) return;
+    if (!Object.keys(track.yZoom).length) return;
+    track.yZoom = {}; // volta a escala vertical desta faixa ao automático
+    drawTrackCanvas(canvas);
+  });
+  bindTrackGutter(gutter, track);
   row.appendChild(gutter);
   row.appendChild(wrap);
   els.tracksContainer.appendChild(row);
 }
 
-function renderOverlayTracks(channels) {
-  const stack = document.createElement("div");
-  stack.className = "overlay-stack";
-
-  const analog = channels.filter((c) => c.kind === "analog");
-  const digital = channels.filter((c) => c.kind === "digital");
-
-  if (analog.length) {
-    stack.appendChild(createOverlayRow("Analógicos (sobrepostos)", analog, false));
-  }
-  digital.forEach((ch) => {
-    stack.appendChild(createOverlayRow(ch.name, [ch], true, ch));
-  });
-
-  els.tracksContainer.appendChild(stack);
-}
-
-function createOverlayRow(title, channels, small, channelMeta = null) {
-  const row = document.createElement("div");
-  row.className = "track-row";
-
-  const gutter = document.createElement("div");
-  gutter.className = "track-gutter-panel";
-  if (channelMeta) {
-    gutter.classList.add("digital");
-    gutter.innerHTML = `<div class="name" title="${escapeHtml(title)}">${escapeHtml(title)}</div>${instantValueHtml(channelMeta.index)}`;
-  } else {
-    gutter.innerHTML = `<div class="name">${escapeHtml(title)}</div>`;
-  }
-
-  const wrap = document.createElement("div");
-  wrap.className = "track-canvas-wrap";
-  wrap.style.height = small ? `${state.density === "compact" ? 22 : 40}px` : `${Math.max(200, els.tracksContainer.clientHeight * 0.55)}px`;
-
-  const canvas = document.createElement("canvas");
-  if (channelMeta) canvas.dataset.channelIndex = String(channelMeta.index);
-  else canvas.dataset.overlayAnalog = "1";
-  wrap.appendChild(canvas);
-
-  const cursor = document.createElement("div");
-  cursor.className = "cursor-line";
-  wrap.appendChild(cursor);
-
-  for (const marker of state.markers) {
-    wrap.appendChild(createMarkerLine(marker));
-  }
-  appendFixedCursorLines(wrap);
-
-  bindTrackInteraction(wrap);
-  row.appendChild(gutter);
-  row.appendChild(wrap);
-  return row;
-}
-
 function bindTrackInteraction(wrap) {
   wrap.addEventListener("mousemove", (e) => onTrackMouseMove(e, wrap));
+  wrap.addEventListener("mouseleave", () => { state.pointerTime = null; });
   wrap.addEventListener("mousedown", (e) => onTrackMouseDown(e, wrap));
+  // o botão direito desenha o retângulo de zoom: sem menu de contexto nas faixas
+  wrap.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
+/** Roda do mouse sobre as faixas e a régua: Shift + roda desloca no tempo;
+ * Ctrl + roda dá zoom no tempo centrado no mouse (sem deixar o navegador ou o
+ * WebView2 ampliar a página); sem modificador, rola a lista de faixas. */
+function bindTrackWheel() {
+  els.tracksContainer.parentElement.addEventListener("wheel", (e) => {
+    if ((!e.shiftKey && !e.ctrlKey) || !state.record) return;
+    // com Shift o Chromium/WebView2 entrega o giro em deltaX
+    const delta = e.deltaY || e.deltaX;
+    if (!delta) return;
+    e.preventDefault();
+    const notches = Math.max(-5, Math.min(5, delta / 100));
+    if (e.ctrlKey) zoomAtPointer(e.clientX, notches);
+    else panBy(notches * 0.1); // 10 % da janela por "clique" da roda
+  }, { passive: false });
+  window.addEventListener("resize", () => syncScrollbarGutter());
+}
+
+function panBy(fraction) {
+  const duration = state.record.duration_s;
+  const span = state.viewEnd - state.viewStart;
+  if (span >= duration) return;
+  const start = Math.min(Math.max(state.viewStart + fraction * span, 0), duration - span);
+  if (start === state.viewStart) return;
+  state.viewStart = start;
+  state.viewEnd = start + span;
+  applyViewChrome();
+  redrawAllCanvases();
+  panRefreshView();
+  if (state.selectedChannels.size > 0 && state.selectedDerivedMetrics.size > 0) panRefreshDerived();
+}
+
+/** Ctrl + roda: zoom no tempo mantendo fixo o instante sob o mouse. */
+function zoomAtPointer(clientX, notches) {
+  if (!state.record) return;
+  const r = els.rulerCanvas.getBoundingClientRect();
+  const frac = Math.min(Math.max((clientX - r.left) / (r.width || 1), 0), 1);
+  const duration = state.record.duration_s;
+  const span0 = state.viewEnd - state.viewStart;
+  const span = Math.max(duration / 500, Math.min(duration, span0 * Math.pow(1.25, notches)));
+  if (span === span0) return;
+  const t = state.viewStart + frac * span0;
+  let start = t - frac * span;
+  start = Math.min(Math.max(start, 0), duration - span);
+  state.viewStart = start;
+  state.viewEnd = start + span;
+  applyViewChrome();
+  redrawAllCanvases();
+  panRefreshView();
+  if (state.selectedChannels.size > 0 && state.selectedDerivedMetrics.size > 0) panRefreshDerived();
 }
 
 function redrawAllCanvases() {
-  const channels = state.waveformCache?.channels || [];
-  const byIndex = new Map(channels.map((ch) => [String(ch.index), ch]));
-
-  document.querySelectorAll("canvas[data-channel-index]").forEach((canvas) => {
-    const ch = byIndex.get(String(canvas.dataset.channelIndex));
-    if (!ch) return;
-    drawChannelCanvas(canvas, ch);
-  });
-
-  const analog = channels.filter((c) => c.kind === "analog");
-  document.querySelectorAll("canvas[data-overlay-analog]").forEach((canvas) => {
-    drawOverlayAnalog(
-      canvas,
-      analog.map((ch, i) => ({
-        times: ch.times,
-        values: ch.values,
-        yMin: yRange(ch)[0],
-        yMax: yRange(ch)[1],
-        color: TH.palette[i % TH.palette.length],
-      })),
-      { viewStart: state.viewStart, viewEnd: state.viewEnd }
-    );
-  });
-
+  document.querySelectorAll("canvas[data-track-id]").forEach((canvas) => drawTrackCanvas(canvas));
   updateCursorLines();
   updateMarkerLines();
   updateFixedCursorLines();
@@ -1371,69 +1696,513 @@ function yRange(ch) {
   return [lo, hi];
 }
 
-function drawChannelCanvas(canvas, ch) {
-  const [yMin, yMax] = yRange(ch);
-  const opts = {
-    viewStart: state.viewStart,
-    viewEnd: state.viewEnd,
-    unit: ch.unit,
-    yMin,
-    yMax,
-    color: ch.kind === "derived" ? TH.derived : undefined,
-  };
-
-  if (ch.kind === "digital") {
-    drawDigitalWaveform(canvas, ch.times, ch.values, opts);
+/** Desenha a faixa e guarda em canvas._axes a escala de cada eixo (na
+ * unidade-base), usada para converter o retângulo de zoom em amplitude. */
+function drawTrackCanvas(canvas) {
+  const track = currentLayout().tracks.find((t) => t.id === canvas.dataset.trackId);
+  if (!track) return;
+  const byId = new Map((state.waveformCache?.channels || []).map((c) => [String(c.index), c]));
+  const chans = track.channels.map((id) => byId.get(id)).filter(Boolean);
+  if (!chans.length) return;
+  const view = { viewStart: state.viewStart, viewEnd: state.viewEnd };
+  const first = chans[0];
+  canvas._axes = null;
+  if (first.kind === "digital") {
+    drawDigitalWaveform(canvas, first.times, first.values, view);
+  } else if (chans.length === 1) {
+    const [yMin, yMax] = yRange(first);
+    const key = axisKey(first);
+    const { factor } = baseUnit(first.unit);
+    const z = track.yZoom[key];
+    const sc = drawAnalogWaveform(canvas, first.times, first.values, {
+      ...view, unit: first.unit, yMin, yMax,
+      yFixed: z ? [z[0] / factor, z[1] / factor] : null,
+      color: first.kind === "derived" ? TH.derived : undefined,
+    });
+    if (sc) canvas._axes = [{ key, lo: sc.lo * factor, hi: sc.hi * factor }];
   } else {
-    drawAnalogWaveform(canvas, ch.times, ch.values, opts);
+    const axes = axesOf(track, (id) => byId.get(id));
+    const colors = TRACK_COLORS();
+    const axisDefs = axes.map((ax) => {
+      let yMin;
+      let yMax;
+      ax.channels.forEach((id) => {
+        const ch = byId.get(id);
+        const f = baseUnit(ch.unit).factor;
+        const [a, b] = yRange(ch);
+        if (a != null) yMin = Math.min(yMin ?? Infinity, a * f);
+        if (b != null) yMax = Math.max(yMax ?? -Infinity, b * f);
+      });
+      return { unit: ax.key, yMin, yMax, yFixed: track.yZoom[ax.key] || null };
+    });
+    const series = chans.map((ch, i) => ({
+      times: ch.times, values: ch.values, color: colors[i % colors.length],
+      axis: axes.findIndex((ax) => ax.channels.includes(String(ch.index))),
+      factor: baseUnit(ch.unit).factor,
+    }));
+    const scales = drawMultiAnalog(canvas, series, { ...view, axes: axisDefs });
+    canvas._axes = scales.map((sc, a) => ({ key: axes[a].key, lo: sc.lo, hi: sc.hi }));
+  }
+  canvas.parentElement?.classList.toggle("y-zoomed", Object.keys(track.yZoom).length > 0);
+}
+
+// ---------------------------------------------------------------------------
+// Altura, reordenar/sobrepor (arrastar o nome) e menu da faixa
+// ---------------------------------------------------------------------------
+function startTrackResize(e, track, wrap) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const y0 = e.clientY;
+  const h0 = wrap.clientHeight;
+  document.body.classList.add("resizing-track");
+  let moved = false;
+  const onMove = (ev) => {
+    if (Math.abs(ev.clientY - y0) > 2) moved = true;
+    if (moved) wrap.style.height = `${Math.max(40, Math.min(900, h0 + ev.clientY - y0))}px`;
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.classList.remove("resizing-track");
+    if (!moved) return; // clique simples (ou 1º do duplo clique): não fixa altura
+    track.height = wrap.clientHeight; // só esta faixa sai do modo alto/compacto
+    drawTrackCanvas(wrap.querySelector("canvas"));
+    updateCursorLines();
+    updateMarkerLines();
+    updateFixedCursorLines();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+function bindTrackGutter(gutter, track) {
+  gutter.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || !e.target.closest(".tg-drag, .tg-grip")) return;
+    e.preventDefault();
+    const title = currentLayout().tracks.find((t) => t.id === track.id)?.channels.map((id) => channelMeta(id).name).join(" + ");
+    startLayoutDrag(e, { type: "track", trackId: track.id }, title || "");
+  });
+  gutter.querySelector(".tg-menu")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openTrackMenu(e.currentTarget, track);
+  });
+}
+
+/** Arraste de uma faixa (pelo nome) ou de um canal da barra lateral até o
+ * gráfico. Bordas entre faixas = inserir ali; meio de uma faixa analógica =
+ * sobrepor. Começa só depois de 5 px (um clique simples continua clique). */
+function startLayoutDrag(e, source, label) {
+  const x0 = e.clientX;
+  const y0 = e.clientY;
+  let active = false;
+  let ghost = null;
+  let line = null;
+  let target = null;
+  let hl = null;
+  let lastEv = null;
+  let raf = 0;
+  // perto da borda de cima/baixo da área das faixas, rola sozinho (para levar
+  // a faixa a uma posição fora da tela)
+  const autoScroll = () => {
+    raf = 0;
+    if (!active || !lastEv) return;
+    const a = els.tracksContainer.getBoundingClientRect();
+    const edge = 36;
+    let dy = 0;
+    if (lastEv.clientY < a.top + edge) dy = -Math.ceil((a.top + edge - lastEv.clientY) / 3);
+    else if (lastEv.clientY > a.bottom - edge) dy = Math.ceil((lastEv.clientY - (a.bottom - edge)) / 3);
+    if (dy && lastEv.clientX >= a.left && lastEv.clientX <= a.right) {
+      const before = els.tracksContainer.scrollTop;
+      els.tracksContainer.scrollTop += dy;
+      if (els.tracksContainer.scrollTop !== before) show(lastEv);
+      raf = requestAnimationFrame(autoScroll);
+    }
+  };
+  const cleanup = () => {
+    if (raf) cancelAnimationFrame(raf);
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("keydown", onKey, true);
+    ghost?.remove();
+    line?.remove();
+    hl?.classList.remove("drop-overlay-ok", "drop-overlay-bad");
+    document.body.classList.remove("dragging-track");
+  };
+  const show = (ev) => {
+    ghost.style.left = `${ev.clientX + 12}px`;
+    ghost.style.top = `${ev.clientY + 8}px`;
+    target = layoutDropTarget(ev.clientX, ev.clientY, source);
+    hl?.classList.remove("drop-overlay-ok", "drop-overlay-bad");
+    hl = null;
+    line.style.display = "none";
+    ghost.querySelector(".dg-hint").textContent = "";
+    if (!target) return;
+    if (target.action === "overlay") {
+      hl = target.row.querySelector(".track-canvas-wrap");
+      hl.classList.add(target.ok ? "drop-overlay-ok" : "drop-overlay-bad");
+      ghost.querySelector(".dg-hint").textContent = target.ok ? "sobrepor nesta faixa" : target.reason;
+    } else {
+      line.style.display = "block";
+      line.style.top = `${target.y - 1}px`;
+      line.style.left = `${target.left}px`;
+      line.style.width = `${target.width}px`;
+      ghost.querySelector(".dg-hint").textContent = source.type === "track" ? "mover para cá"
+        : source.type === "channels" ? "uma faixa para cada, aqui" : "abrir aqui";
+    }
+  };
+  const onMove = (ev) => {
+    if (!active) {
+      if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+      active = true;
+      document.body.classList.add("dragging-track");
+      ghost = document.createElement("div");
+      ghost.className = "drag-ghost";
+      ghost.innerHTML = `<b>${escapeHtml(label)}</b><span class="dg-hint"></span>`;
+      line = document.createElement("div");
+      line.className = "drop-line";
+      document.body.append(ghost, line);
+    }
+    lastEv = ev;
+    show(ev);
+    if (!raf) raf = requestAnimationFrame(autoScroll);
+  };
+  const onUp = () => {
+    cleanup();
+    if (!active) return;
+    suppressNextClick();
+    if (target) applyLayoutDrop(source, target);
+  };
+  const onKey = (ev) => {
+    if (ev.key === "Escape") {
+      ev.stopPropagation();
+      cleanup();
+      if (active) suppressNextClick();
+    }
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+  window.addEventListener("keydown", onKey, true);
+}
+
+/** Depois de um arraste, o clique que o navegador dispara ao soltar não deve
+ * marcar checkbox nem abrir nada. */
+function suppressNextClick() {
+  const stop = (ev) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+  };
+  window.addEventListener("click", stop, { capture: true, once: true });
+  setTimeout(() => window.removeEventListener("click", stop, { capture: true }), 300);
+}
+
+function sourceIds(source) {
+  if (source.type === "track") return [...(currentLayout().tracks.find((t) => t.id === source.trackId)?.channels || [])];
+  if (source.type === "channels") return source.ids.map(String);
+  return [String(source.id)];
+}
+
+function layoutDropTarget(cx, cy, source) {
+  const area = els.tracksContainer.getBoundingClientRect();
+  if (cx < area.left || cx > area.right || cy < area.top - 10 || cy > area.bottom + 10) return null;
+  const L = currentLayout();
+  const rows = Array.from(els.tracksContainer.querySelectorAll(".track-row"));
+  const lineAt = (pos) => {
+    const r = rows[Math.min(pos, rows.length - 1)]?.getBoundingClientRect();
+    const y = !r ? area.top + 2 : pos >= rows.length ? r.bottom : r.top;
+    return { y: Math.min(Math.max(y, area.top + 1), area.bottom - 1), left: area.left, width: area.width };
+  };
+  if (!rows.length) return { action: "insert", pos: 0, ...lineAt(0) };
+  const ids = sourceIds(source);
+  const srcKind = channelMeta(ids[0]).kind;
+  for (let i = 0; i < rows.length; i += 1) {
+    const r = rows[i].getBoundingClientRect();
+    if (cy < r.top || cy > r.bottom) continue;
+    const track = L.tracks.find((t) => t.id === rows[i].dataset.trackId);
+    const pos = L.tracks.indexOf(track);
+    const rel = (cy - r.top) / (r.height || 1);
+    const same = source.type === "track" && track.id === source.trackId;
+    const kindsMatch = srcKind === "analog" && trackKind(track) === "analog";
+    const t = dropTarget(pos, rel, kindsMatch && !same);
+    if (t.action === "overlay") {
+      const check = canOverlay(L, track.id, ids, channelMeta);
+      return { ...t, track, row: rows[i], ok: check.ok, reason: check.reason };
+    }
+    return { ...t, ...lineAt(t.pos) };
+  }
+  return cy < rows[0].getBoundingClientRect().top ? { action: "insert", pos: 0, ...lineAt(0) }
+    : { action: "insert", pos: rows.length, ...lineAt(rows.length) };
+}
+
+function applyLayoutDrop(source, target) {
+  const L = currentLayout();
+  const ids = sourceIds(source);
+  if (target.action === "overlay") {
+    if (!target.ok) {
+      showToast(target.reason);
+      return;
+    }
+    if (source.type === "track") overlayTrack(L, source.trackId, target.track.id, channelMeta);
+    else overlayChannels(L, target.track.id, ids, channelMeta);
+  } else if (source.type === "track") {
+    moveTrack(L, source.trackId, target.pos);
+  } else {
+    // vários canais da lista entre faixas: uma faixa para cada, na ordem da lista
+    insertChannelsEach(L, ids, target.pos);
+  }
+  // canal da lista que ainda não estava aberto: abre (busca os dados)
+  const fresh = ids.filter((id) => /^\d+$/.test(id) && !state.selectedChannels.has(Number(id)));
+  if (fresh.length) {
+    fresh.forEach((id) => state.selectedChannels.add(Number(id)));
+    syncChannelCheckboxes();
+    refreshView();
+    bus.emit("channels");
+  } else {
+    relayout();
   }
 }
 
+function openTrackMenu(btn, track) {
+  document.getElementById("track-menu")?.remove();
+  const L = currentLayout();
+  const i = L.tracks.indexOf(track);
+  if (i < 0) return;
+  const raw = track.channels.filter((id) => /^\d+$/.test(id));
+  const items = [
+    { id: "up", label: "Mover para cima", disabled: i === 0 },
+    { id: "down", label: "Mover para baixo", disabled: i === L.tracks.length - 1 },
+    ...(track.channels.length > 1 ? [{ id: "split", label: "Separar canais" }] : []),
+    ...(raw.length === track.channels.length ? [{ id: "close", label: track.channels.length > 1 ? "Fechar estes canais" : "Fechar canal" }] : []),
+  ];
+  const pop = document.createElement("div");
+  pop.id = "track-menu";
+  pop.className = "track-menu";
+  pop.setAttribute("role", "menu");
+  pop.innerHTML = items.map((it) => `<button type="button" class="menu-item" role="menuitem" data-act="${it.id}" ${it.disabled ? "disabled" : ""}>${it.label}</button>`).join("");
+  document.body.appendChild(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.left = `${Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)}px`;
+  pop.style.top = `${Math.min(r.bottom + 2, window.innerHeight - pop.offsetHeight - 8)}px`;
+  pop.querySelector("button:not([disabled])")?.focus();
+  const close = () => {
+    pop.remove();
+    window.removeEventListener("mousedown", outside, true);
+    window.removeEventListener("keydown", onKey, true);
+  };
+  const outside = (e) => { if (!pop.contains(e.target)) close(); };
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.stopPropagation(); close(); btn.focus(); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const bs = Array.from(pop.querySelectorAll("button:not([disabled])"));
+      const k = bs.indexOf(document.activeElement);
+      bs[(k + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length]?.focus();
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("mousedown", outside, true);
+  window.addEventListener("keydown", onKey, true);
+  pop.addEventListener("click", (e) => {
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (!act) return;
+    close();
+    if (act === "up") moveTrack(L, track.id, i - 1);
+    else if (act === "down") moveTrack(L, track.id, i + 2);
+    else if (act === "split") splitTrack(L, track.id);
+    else if (act === "close") {
+      raw.forEach((id) => state.selectedChannels.delete(Number(id)));
+      syncChannelCheckboxes();
+      refreshView();
+      bus.emit("channels");
+      return;
+    }
+    relayout();
+    // devolve o foco ao menu da faixa movida (teclado)
+    els.tracksContainer.querySelector(`.track-row[data-track-id="${track.id}"] .tg-menu`)?.focus();
+  });
+}
+
+function showToast(message) {
+  let el = document.getElementById("toast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "toast";
+    el.className = "toast";
+    el.setAttribute("role", "status");
+    document.body.appendChild(el);
+  }
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove("show"), 3500);
+}
+
+/** Passar o mouse não move nada: só guarda o tempo para as teclas 1/2. */
 function onTrackMouseMove(e, wrap) {
   const rect = wrap.getBoundingClientRect();
-  const time = xToTime(e.clientX - rect.left, rect.width);
+  state.pointerTime = xToTime(e.clientX - rect.left, rect.width);
+}
+
+/** Gestos nas faixas:
+ * - esquerdo: clique posiciona o cursor; arrastando, ele acompanha o mouse
+ *   (C1/C2: teclas 1/2, botões ou arrastar as linhas);
+ * - direito: arrastar desenha um retângulo e dá zoom nele (tempo e, se o
+ *   retângulo ficar dentro de uma faixa analógica, também a escala vertical
+ *   dela); clique direito sem arrastar volta ao zoom anterior;
+ * - botão da roda (meio): volta ao zoom anterior;
+ * - Shift + roda: desloca no tempo (bindTrackWheel). */
+function onTrackMouseDown(e, wrap) {
+  if (e.button === 2) {
+    startZoomRect(e, wrap);
+    return;
+  }
+  if (e.button === 1) {
+    e.preventDefault(); // impede a rolagem automática do Windows
+    // dois cliques no botão da roda: volta ao registro inteiro; um: zoom anterior
+    const now = performance.now();
+    if (now - lastMiddleClick < 450) {
+      lastMiddleClick = 0;
+      zoomFit();
+    } else {
+      lastMiddleClick = now;
+      zoomBack();
+    }
+    return;
+  }
+  if (e.button !== 0) return;
+  e.preventDefault(); // evita selecionar texto ao arrastar
+  const rect = wrap.getBoundingClientRect();
+  const toTime = (clientX) => xToTime(Math.min(Math.max(clientX - rect.left, 0), rect.width), rect.width);
+  moveCursorTo(toTime(e.clientX));
+  const onMove = (ev) => moveCursorTo(toTime(ev.clientX));
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
+let lastMiddleClick = 0;
+
+function moveCursorTo(time) {
   state.cursorTime = time;
   ruler.setCursor(time);
   updateCursorLines();
-  updateInstantValues();
   updatePhasorPanel();
   updateStatus();
   emitCursor();
 }
 
-function onTrackMouseDown(e, wrap) {
-  const rect = wrap.getBoundingClientRect();
-  const startX = e.clientX - rect.left;
-  const anchor = xToTime(startX, rect.width);
-  let moved = false;
+// ---------------------------------------------------------------------------
+// Zoom por retângulo (botão direito)
+// ---------------------------------------------------------------------------
+const ZOOM_MIN_PX = 6;
 
-  const onMove = (ev) => {
-    const x = ev.clientX - rect.left;
-    if (Math.abs(x - startX) > 4) moved = true;
-    if (moved) {
-      const t = xToTime(x, rect.width);
-      state.selection = { start: anchor, end: t };
-      ruler.setSelection(normalizeSelection(state.selection));
-      updateSelectionOverlay();
-      updateStatus();
-      emitSelection();
-    } else {
-      state.cursorTime = xToTime(x, rect.width);
-      ruler.setCursor(state.cursorTime);
-      updateCursorLines();
-      updateInstantValues();
-      updateStatus();
-      emitCursor();
-    }
+function startZoomRect(e, wrap) {
+  e.preventDefault();
+  const area = els.tracksContainer.getBoundingClientRect();
+  const plot = wrap.getBoundingClientRect(); // limites horizontais da área de plotagem
+  const clampX = (x) => Math.min(Math.max(x, plot.left), plot.right);
+  const clampY = (y) => Math.min(Math.max(y, area.top), area.bottom);
+  const x0 = clampX(e.clientX);
+  const y0 = clampY(e.clientY);
+  let x1 = x0;
+  let y1 = y0;
+  const box = document.createElement("div");
+  box.className = "zoom-rect";
+  document.body.appendChild(box);
+  document.body.classList.add("zooming-rect");
+  const draw = () => {
+    box.style.left = `${Math.min(x0, x1)}px`;
+    box.style.top = `${Math.min(y0, y1)}px`;
+    box.style.width = `${Math.abs(x1 - x0)}px`;
+    box.style.height = `${Math.abs(y1 - y0)}px`;
   };
-
-  const onUp = () => {
+  draw();
+  const onMove = (ev) => {
+    x1 = clampX(ev.clientX);
+    y1 = clampY(ev.clientY);
+    draw();
+  };
+  const onUp = (ev) => {
+    if (ev.button !== 2) return;
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
+    box.remove();
+    document.body.classList.remove("zooming-rect");
+    const dx = Math.abs(x1 - x0);
+    const dy = Math.abs(y1 - y0);
+    if (dx < ZOOM_MIN_PX && dy < ZOOM_MIN_PX) {
+      zoomBack();
+      return;
+    }
+    applyZoomRect(wrap, plot, { x0, x1, y0, y1 }, dx >= ZOOM_MIN_PX);
   };
-
   window.addEventListener("mousemove", onMove);
   window.addEventListener("mouseup", onUp);
+}
+
+/** Converte o retângulo (coordenadas da janela) em novo intervalo de tempo e,
+ * quando cabe numa faixa analógica, em escala vertical dela. */
+function applyZoomRect(startWrap, plot, r, zoomTime) {
+  const { viewStart, viewEnd } = state;
+  const span = viewEnd - viewStart || 1;
+  const next = { viewStart, viewEnd };
+  if (zoomTime) {
+    const tA = viewStart + ((Math.min(r.x0, r.x1) - plot.left) / plot.width) * span;
+    const tB = viewStart + ((Math.max(r.x0, r.x1) - plot.left) / plot.width) * span;
+    const minSpan = (state.record?.duration_s || 1) / 500;
+    if (tB - tA >= minSpan * 0.999) {
+      next.viewStart = Math.max(0, tA);
+      next.viewEnd = Math.min(state.record.duration_s, tB);
+    } else {
+      const c = (tA + tB) / 2;
+      next.viewStart = Math.max(0, c - minSpan / 2);
+      next.viewEnd = Math.min(state.record.duration_s, next.viewStart + minSpan);
+    }
+  }
+  // zoom vertical: o retângulo terminou na mesma faixa analógica em que começou;
+  // vale para todos os eixos da faixa (canais sobrepostos), cada um na sua escala
+  const canvas = startWrap.querySelector("canvas[data-track-id]");
+  const track = canvas && currentLayout().tracks.find((t) => t.id === canvas.dataset.trackId);
+  const wr = startWrap.getBoundingClientRect();
+  const insideStart = r.y1 >= wr.top && r.y1 <= wr.bottom;
+  let yNew = null;
+  if (track && canvas._axes?.length && insideStart && Math.abs(r.y1 - r.y0) >= ZOOM_MIN_PX) {
+    yNew = {};
+    for (const ax of canvas._axes) {
+      const toV = (y) => ax.lo + ((wr.bottom - y) / wr.height) * (ax.hi - ax.lo);
+      const vA = toV(Math.max(r.y0, r.y1));
+      const vB = toV(Math.min(r.y0, r.y1));
+      if (vB > vA) yNew[ax.key] = [vA, vB];
+    }
+    if (!Object.keys(yNew).length) yNew = null;
+  }
+  if (!zoomTime && !yNew) return;
+  state.zoomHistory.push({ viewStart, viewEnd, yZoom: snapshotYZoom() });
+  if (state.zoomHistory.length > 30) state.zoomHistory.shift();
+  if (yNew) track.yZoom = { ...track.yZoom, ...yNew };
+  state.viewStart = next.viewStart;
+  state.viewEnd = next.viewEnd;
+  applyViewChrome();
+  refreshView();
+}
+
+function zoomBack() {
+  const prev = state.zoomHistory.pop();
+  if (!prev) return;
+  state.viewStart = prev.viewStart;
+  state.viewEnd = Math.min(prev.viewEnd, state.record?.duration_s ?? prev.viewEnd);
+  currentLayout().tracks.forEach((t) => {
+    t.yZoom = { ...(prev.yZoom.get(t.id) || {}) };
+  });
+  applyViewChrome();
+  refreshView();
+}
+
+/** Zoom vertical de todas as faixas (para o "voltar ao zoom anterior"). */
+function snapshotYZoom() {
+  return new Map(currentLayout().tracks.map((t) => [t.id, { ...t.yZoom }]));
 }
 
 function updateCursorLines() {
@@ -1479,66 +2248,111 @@ function debounce(fn, ms) {
   };
 }
 
-const panRefreshView = debounce(() => {
-  const hasChannels = state.selectedChannels.size > 0;
-  refreshView({ skipDerived: hasChannels });
-}, 30);
-const panRefreshDerived = debounce(() => refreshView({ derivedOnly: true }), 250);
-
-const fetchExactInstantValues = debounce(async () => {
-  if (state.cursorTime == null || !state.record || !state.waveformCache) return;
-  const indices = state.waveformCache.channels
-    .map((ch) => ch.index)
-    .filter((idx) => typeof idx === "number" || /^\d+$/.test(String(idx)));
-  try {
-    const result = await fetchValueAtTime(state.record.id, indices, state.cursorTime);
-    const byIndex = new Map(result.channels.map((ch) => [ch.index, ch]));
-    document.querySelectorAll(".instant-value").forEach((el) => {
-      const ch = byIndex.get(Number(el.dataset.instant));
-      if (ch) {
-        setInstantValue(el, ch.value, ch.unit, ch.kind, result.time_s);
-      }
-    });
-  } catch (err) {
-    console.warn("Valor instantâneo:", err);
-  }
-}, 80);
-
-/** Digitais chegam só com as transições: valor = último ponto com t ≤ cursor. */
-function stepValue(times, values, time) {
-  if (!times.length) return null;
-  let lo = 0;
-  let hi = times.length - 1;
-  if (time < times[0]) return values[0];
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (times[mid] <= time) lo = mid;
-    else hi = mid - 1;
-  }
-  return values[lo];
-}
-
-function updateInstantValues() {
-  if (state.cursorTime == null || !state.waveformCache) {
-    document.querySelectorAll(".instant-value").forEach(clearInstantValue);
+/** Consulta durante pan/zoom contínuos: no máximo uma em andamento; ao
+ * terminar, se a janela mudou de novo, já pede a próxima (a tela acompanha a
+ * rolagem em vez de esperar o usuário parar). */
+let panInflight = false;
+let panPending = false;
+async function panRefreshView() {
+  if (panInflight) {
+    panPending = true;
     return;
   }
+  panInflight = true;
+  try {
+    await refreshView({ skipDerived: state.selectedChannels.size > 0 });
+  } finally {
+    panInflight = false;
+    if (panPending) {
+      panPending = false;
+      requestAnimationFrame(() => panRefreshView());
+    }
+  }
+}
+const panRefreshDerived = debounce(() => refreshView({ derivedOnly: true }), 250);
 
-  const byIndex = new Map(state.waveformCache.channels.map((ch) => [String(ch.index), ch]));
-  document.querySelectorAll(".instant-value").forEach((el) => {
-    const ch = byIndex.get(String(el.dataset.instant));
+// ---------------------------------------------------------------------------
+// Valores nos cursores C1/C2 (RMS verdadeiro | RMS fundamental | instantâneo)
+// Calculados no backend só nos instantes de C1/C2 e só quando eles (ou o modo,
+// ou os canais) mudam – nada é recalculado ao passar o mouse.
+// ---------------------------------------------------------------------------
+const CV_TITLE = "Valor em C1/C2 – posicione C1 com clique na faixa ou tecla 1; C2 com Shift+clique ou tecla 2";
+
+function cvHtml(index) {
+  return `<div class="cv" data-cv="${index}" title="${CV_TITLE}"><span class="cv-empty">—</span></div>`;
+}
+
+let cvSeq = 0;
+async function updateCursorValues() {
+  const nodes = document.querySelectorAll("[data-cv]");
+  const { c1, c2 } = state.fixedCursors;
+  const hasC1 = c1 != null;
+  const hasC2 = c2 != null;
+  applyTrackHeights();
+  const chans = state.waveformCache?.channels || [];
+  if (!state.record || !chans.length || (!hasC1 && !hasC2)) {
+    nodes.forEach((el) => { el.innerHTML = cursorValuesHtml({ hasC1: false, hasC2: false }); });
+    return;
+  }
+  const raw = chans.filter((ch) => ch.kind !== "derived" && /^\d+$/.test(String(ch.index))).map((ch) => Number(ch.index));
+  const times = [c1, c2].filter((t) => t != null);
+  const key = `${state.record.id}|${state.valueMode}|${times.join(",")}|${raw.join(",")}`;
+  const seq = ++cvSeq;
+  if (raw.length && state.cursorValues.key !== key) {
+    try {
+      const res = await fetchValueAtTime(state.record.id, raw, null, { times, mode: state.valueMode });
+      if (seq !== cvSeq) return;
+      const byIndex = new Map();
+      res.points.forEach((pt, i) => {
+        const slot = hasC1 && i === 0 ? "c1" : "c2";
+        pt.channels.forEach((ch) => {
+          const entry = byIndex.get(String(ch.index)) || {};
+          entry[slot] = ch.value;
+          byIndex.set(String(ch.index), entry);
+        });
+      });
+      state.cursorValues = { key, byIndex };
+    } catch (err) {
+      if (seq !== cvSeq) return;
+      console.warn("Valor no cursor:", err);
+      state.cursorValues = { key: "", byIndex: new Map() };
+    }
+  }
+  if (seq !== cvSeq) return;
+  const byChan = new Map(chans.map((ch) => [String(ch.index), ch]));
+  document.querySelectorAll("[data-cv]").forEach((el) => {
+    const ch = byChan.get(String(el.dataset.cv));
     if (!ch) {
-      clearInstantValue(el);
+      el.innerHTML = cursorValuesHtml({ hasC1: false, hasC2: false });
       return;
     }
-    const value = ch.kind === "digital"
-      ? stepValue(ch.times, ch.values, state.cursorTime)
-      : interpolateValue(ch.times, ch.values, state.cursorTime);
-    const kind = ch.kind === "derived" ? "analog" : ch.kind;
-    setInstantValue(el, value, ch.unit, kind, state.cursorTime);
+    let v;
+    if (ch.kind === "derived") {
+      // grandezas calculadas (já são módulos/RMS): interpolação da série exibida
+      v = { c1: hasC1 ? interpolateValue(ch.times, ch.values, c1) : null, c2: hasC2 ? interpolateValue(ch.times, ch.values, c2) : null };
+    } else {
+      v = state.cursorValues.byIndex.get(String(ch.index)) || {};
+    }
+    el.innerHTML = cursorValuesHtml({ kind: ch.kind, unit: ch.unit, mode: state.valueMode, hasC1, hasC2, c1: v.c1 ?? null, c2: v.c2 ?? null });
   });
+}
 
-  fetchExactInstantValues();
+/** Ajusta a altura das faixas quando muda o nº de linhas de valor (C1 ↔ C1·C2·Δ). */
+let lastCvLines = 0;
+function applyTrackHeights() {
+  const lines = cursorLineCount(state.fixedCursors.c1 != null, state.fixedCursors.c2 != null);
+  if (lines === lastCvLines) return;
+  lastCvLines = lines;
+  const L = currentLayout();
+  let changed = false;
+  els.tracksContainer.querySelectorAll(".track-row[data-track-id]").forEach((row) => {
+    const track = L.tracks.find((t) => t.id === row.dataset.trackId);
+    const wrap = row.querySelector(".track-canvas-wrap");
+    if (!track || !wrap) return;
+    const h = `${trackHeight(track)}px`;
+    if (wrap.style.height !== h) { wrap.style.height = h; changed = true; }
+  });
+  if (changed) redrawAllCanvases();
 }
 
 const updatePhasorPanel = debounce(async () => {
@@ -1600,6 +2414,7 @@ function onNavScroll() {
   state.viewStart = ratio * maxStart;
   state.viewEnd = state.viewStart + span;
   applyViewChrome();
+  redrawAllCanvases(); // desloca já o que está carregado; a consulta completa vem em seguida
   panRefreshView();
   if (state.selectedChannels.size > 0 && state.selectedDerivedMetrics.size > 0) {
     panRefreshDerived();
@@ -1626,6 +2441,8 @@ function zoomBy(factor) {
 
 function zoomFit() {
   if (!state.record) return;
+  currentLayout().tracks.forEach((t) => { t.yZoom = {}; });
+  state.zoomHistory = [];
   state.viewStart = 0;
   state.viewEnd = state.record.duration_s;
   applyViewChrome();
@@ -1634,7 +2451,7 @@ function zoomFit() {
 
 function zoomToSelection() {
   if (!state.selection) {
-    alert("Selecione um intervalo arrastando o mouse na régua ou nas faixas.");
+    alert("Selecione um intervalo arrastando o mouse na régua (ou use o botão direito nas faixas para dar zoom num retângulo).");
     return;
   }
   const sel = normalizeSelection(state.selection);
@@ -1712,7 +2529,7 @@ function updateStatus() {
   if (c1 != null) parts.push(`C1 ${formatTime(c1)}`);
   if (c2 != null) parts.push(`C2 ${formatTime(c2)}`);
   if (c1 != null && c2 != null) parts.push(`Δt ${((c2 - c1) * 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 3 })} ms`);
-  els.statusCursors.textContent = parts.length ? parts.join(" · ") : "C1/C2: teclas 1 e 2";
+  els.statusCursors.textContent = parts.length ? parts.join(" · ") : "C1/C2: teclas 1 e 2 (na posição do mouse)";
 }
 
 // ---------------------------------------------------------------------------
@@ -1753,6 +2570,7 @@ function appendFixedCursorLines(wrap) {
 }
 
 function startFixedCursorDrag(e, el) {
+  if (e.button !== 0) return; // botão direito: segue para a faixa (zoom por retângulo)
   e.preventDefault();
   e.stopPropagation();
   const wrap = el.parentElement;
@@ -1827,10 +2645,24 @@ function captureView({ scale = 2 } = {}) {
     g.fillRect(0, y, gutterW, h);
     g.fillStyle = "#2a2a2a";
     g.font = "600 12px Segoe UI, Arial, sans-serif";
-    g.fillText(fit(row.querySelector(".name")?.textContent.trim() || "", gutterW - 12), 8, y + 18);
-    g.fillStyle = "#666";
-    g.font = "11px Segoe UI, Arial, sans-serif";
-    g.fillText(fit(row.querySelector(".meta")?.textContent.trim() || "", gutterW - 12), 8, y + 33);
+    const items = Array.from(row.querySelectorAll(".tg-ch"));
+    if (items.length > 1) {
+      // faixa sobreposta: nome de cada canal com a cor da curva
+      g.font = "11px Segoe UI, Arial, sans-serif";
+      items.forEach((it, k) => {
+        const yy = y + 14 + k * 14;
+        if (yy > y + h - 4) return;
+        g.fillStyle = it.querySelector(".sw")?.style.background || "#2a2a2a";
+        g.fillRect(8, yy - 8, 9, 9);
+        g.fillStyle = "#2a2a2a";
+        g.fillText(fit(`${it.querySelector(".tg-ch-name")?.textContent || ""} ${it.querySelector(".unit")?.textContent || ""}`.trim(), gutterW - 26), 22, yy);
+      });
+    } else {
+      g.fillText(fit(row.dataset.title || row.querySelector(".name")?.textContent.trim() || "", gutterW - 12), 8, y + 18);
+      g.fillStyle = "#666";
+      g.font = "11px Segoe UI, Arial, sans-serif";
+      g.fillText(fit(row.querySelector(".meta")?.textContent.trim() || "", gutterW - 12), 8, y + 33);
+    }
     g.fillStyle = "#fafafa";
     g.fillRect(gutterW, y, plotW, h);
     if (canvas) g.drawImage(canvas, gutterW, y, plotW, h);

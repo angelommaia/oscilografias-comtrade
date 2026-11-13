@@ -27,7 +27,7 @@ hidden = (
     + collect_submodules("analysis")
     + collect_submodules("protection")
     + collect_submodules("report")
-    + ["comtrade", "comtrade_reader", "comtrade_service", "merge", "phasor_analysis", "sample_catalog", "config", "main", "version", "provenance"]
+    + ["comtrade", "comtrade_reader", "comtrade_service", "merge", "timequality", "archive", "phasor_analysis", "sample_catalog", "config", "main", "version", "provenance"]
 )
 
 a = Analysis(

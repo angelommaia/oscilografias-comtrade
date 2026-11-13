@@ -24,6 +24,7 @@ class RecordData:
     auto_groups: list[dict[str, Any]] = field(default_factory=list)
     ranges: dict[int, tuple[float, float]] = field(default_factory=dict)  # mín/máx do registro (cache)
     sources: list[Any] = field(default_factory=list)  # provenance.SourceRef – arquivos de origem
+    cache: dict[str, Any] = field(default_factory=dict)  # resultados caros reaproveitáveis (ex.: início da perturbação)
 
     @property
     def groups(self) -> list[dict[str, Any]]:

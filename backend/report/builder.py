@@ -291,7 +291,7 @@ def collect(ctx, opts: ReportOptions) -> Blocks:
 
     # 7. análise
     if opts.comments.strip() or opts.conclusion.strip():
-        b.h("7. Análise do especialista")
+        b.h("7. Parecer técnico do analista")
         if opts.comments.strip():
             b.h("Comentários", 2)
             for par in opts.comments.strip().split("\n\n"):

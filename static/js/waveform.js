@@ -1,7 +1,8 @@
 import { T as TH } from "./core/theme.js";
 
 export function drawAnalogWaveform(canvas, times, values, options = {}) {
-  const { color = TH.waveAnalog, yMin, yMax, viewStart, viewEnd, unit = "" } = options;
+  // yFixed: [lo, hi] da escala vertical exata (zoom por retângulo); o que sair dela é cortado
+  const { color = TH.waveAnalog, yMin, yMax, yFixed = null, viewStart, viewEnd, unit = "" } = options;
   const ctx = setupCanvas(canvas);
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
@@ -22,11 +23,17 @@ export function drawAnalogWaveform(canvas, times, values, options = {}) {
     dataMin = 0;
     dataMax = 1;
   }
-  const vMin = yMin ?? dataMin;
-  const vMax = yMax ?? dataMax;
-  const pad = Math.max((vMax - vMin) * 0.06, Math.abs(vMax) * 0.02, 0.01);
-  const lo = Math.min(vMin, dataMin) - pad;
-  const hi = Math.max(vMax, dataMax) + pad;
+  let lo;
+  let hi;
+  if (yFixed && yFixed[1] > yFixed[0]) {
+    [lo, hi] = yFixed;
+  } else {
+    const vMin = yMin ?? dataMin;
+    const vMax = yMax ?? dataMax;
+    const pad = Math.max((vMax - vMin) * 0.06, Math.abs(vMax) * 0.02, 0.01);
+    lo = Math.min(vMin, dataMin) - pad;
+    hi = Math.max(vMax, dataMax) + pad;
+  }
   const spanV = hi - lo || 1;
 
   ctx.clearRect(0, 0, w, h);
@@ -77,6 +84,7 @@ export function drawAnalogWaveform(canvas, times, values, options = {}) {
   ctx.stroke();
 
   drawAxisLabels(ctx, w, h, lo, hi, unit);
+  return { lo, hi };
 }
 
 export function drawDigitalWaveform(canvas, times, values, options = {}) {
@@ -132,51 +140,85 @@ export function drawDigitalWaveform(canvas, times, values, options = {}) {
   }
 }
 
-export function drawOverlayAnalog(canvas, seriesList, options = {}) {
-  const { viewStart, viewEnd } = options;
+/** Faixa com vários canais analógicos sobrepostos, em até 2 eixos (esquerda e
+ * direita). Cada série: {times, values, color, axis: 0|1, factor} (factor
+ * converte para a unidade-base do eixo, ex.: kV → V). Cada eixo: {unit, yMin,
+ * yMax (faixa sugerida já na unidade-base), yFixed: [lo, hi] | null}.
+ * Devolve a escala usada em cada eixo: [{lo, hi}]. */
+export function drawMultiAnalog(canvas, seriesList, options = {}) {
+  const { viewStart, viewEnd, axes = [] } = options;
   const ctx = setupCanvas(canvas);
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  if (!seriesList.length) return;
-
-  const minT = viewStart ?? Math.min(...seriesList.flatMap((s) => s.times));
-  const maxT = viewEnd ?? Math.max(...seriesList.flatMap((s) => s.times));
+  if (!seriesList.length || w <= 0 || h <= 0) return [];
+  const minT = viewStart ?? Math.min(...seriesList.map((s) => s.times[0] ?? 0));
+  const maxT = viewEnd ?? Math.max(...seriesList.map((s) => s.times[s.times.length - 1] ?? 1));
   const spanT = maxT - minT || 1;
+
+  const scales = axes.map((ax, a) => {
+    if (ax.yFixed && ax.yFixed[1] > ax.yFixed[0]) return { lo: ax.yFixed[0], hi: ax.yFixed[1] };
+    let dMin = Infinity;
+    let dMax = -Infinity;
+    for (const sr of seriesList) {
+      if (sr.axis !== a) continue;
+      const f = sr.factor || 1;
+      for (const v of sr.values) {
+        if (v == null || !Number.isFinite(v)) continue;
+        if (v * f < dMin) dMin = v * f;
+        if (v * f > dMax) dMax = v * f;
+      }
+    }
+    if (!Number.isFinite(dMin)) { dMin = 0; dMax = 1; }
+    const vMin = ax.yMin ?? dMin;
+    const vMax = ax.yMax ?? dMax;
+    const pad = Math.max((vMax - vMin) * 0.06, Math.abs(vMax) * 0.02, 0.01);
+    return { lo: Math.min(vMin, dMin) - pad, hi: Math.max(vMax, dMax) + pad };
+  });
 
   ctx.clearRect(0, 0, w, h);
   drawGrid(ctx, w, h);
-
-  const palette = TH.palette;
-
-  seriesList.forEach((series, idx) => {
-    const values = series.values;
-    const lo = series.yMin ?? Math.min(...values);
-    const hi = series.yMax ?? Math.max(...values);
-    const pad = (hi - lo) * 0.1 || 1;
-    const yLo = lo - pad;
-    const yHi = hi + pad;
-    const spanV = yHi - yLo || 1;
-    const color = series.color || palette[idx % palette.length];
-
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.1;
-    ctx.beginPath();
-    let started = false;
-
-    for (let i = 0; i < series.times.length; i += 1) {
-      const t = series.times[i];
-      if (t < minT || t > maxT) continue;
-      const x = ((t - minT) / spanT) * w;
-      const y = h - ((values[i] - yLo) / spanV) * h;
-      if (!started) {
-        ctx.moveTo(x, y);
-        started = true;
-      } else {
-        ctx.lineTo(x, y);
-      }
-    }
-    ctx.stroke();
+  seriesList.forEach((sr, idx) => {
+    const sc = scales[sr.axis] || scales[0];
+    strokeSeries(ctx, sr.times, sr.values, {
+      minT, maxT, spanT, w, h, lo: sc.lo, spanV: sc.hi - sc.lo || 1, factor: sr.factor || 1,
+      color: sr.color || TH.palette[idx % TH.palette.length],
+    });
   });
+  scales.forEach((sc, a) => drawAxisLabels(ctx, w, h, sc.lo, sc.hi, axes[a]?.unit || "", a === 1 ? "right" : "left"));
+  return scales;
+}
+
+function strokeSeries(ctx, times, values, o) {
+  const { minT, maxT, spanT, w, h, lo, spanV, factor, color } = o;
+  const yOf = (v) => h - ((v * factor - lo) / spanV) * h;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  let started = false;
+  for (let i = 0; i < times.length; i += 1) {
+    const t = times[i];
+    if (t < minT) continue;
+    if (t > maxT) {
+      if (started && values[i - 1] != null) ctx.lineTo(w, yOf(values[i - 1]));
+      break;
+    }
+    const v = values[i];
+    if (v == null || !Number.isFinite(v)) { started = false; continue; }
+    const x = ((t - minT) / spanT) * w;
+    if (!started) {
+      if (i > 0 && times[i - 1] < minT && values[i - 1] != null) {
+        const r = (minT - times[i - 1]) / (t - times[i - 1] || 1);
+        ctx.moveTo(0, yOf(values[i - 1] + (v - values[i - 1]) * r));
+        ctx.lineTo(x, yOf(v));
+      } else {
+        ctx.moveTo(x, yOf(v));
+      }
+      started = true;
+    } else {
+      ctx.lineTo(x, yOf(v));
+    }
+  }
+  ctx.stroke();
 }
 
 function setupCanvas(canvas) {
@@ -211,13 +253,14 @@ function drawGrid(ctx, w, h, light = false) {
   }
 }
 
-function drawAxisLabels(ctx, w, h, lo, hi, unit) {
+function drawAxisLabels(ctx, w, h, lo, hi, unit, side = "left") {
   ctx.fillStyle = TH.axis;
   ctx.font = "10px Segoe UI, sans-serif";
-  ctx.textAlign = "left";
+  ctx.textAlign = side === "right" ? "right" : "left";
   ctx.textBaseline = "middle";
-  ctx.fillText(`${formatValue(hi)}${unit ? " " + unit : ""}`, 4, 10);
-  ctx.fillText(`${formatValue(lo)}${unit ? " " + unit : ""}`, 4, h - 10);
+  const x = side === "right" ? w - 4 : 4;
+  ctx.fillText(`${formatValue(hi)}${unit ? " " + unit : ""}`, x, 10);
+  ctx.fillText(`${formatValue(lo)}${unit ? " " + unit : ""}`, x, h - 10);
 }
 
 function formatValue(v) {

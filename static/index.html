@@ -26,9 +26,9 @@
         <button type="button" class="btn menu-btn">Arquivo <span class="caret">▾</span></button>
         <div class="menu-pop">
           <label class="menu-item file-btn">Abrir COMTRADE…
-            <input type="file" id="file-input" accept=".cfg,.CFG,.dat,.DAT" multiple hidden />
+            <input type="file" id="file-input" accept=".cfg,.CFG,.dat,.DAT,.cff,.CFF,.zip,.ZIP" multiple hidden />
           </label>
-          <button type="button" id="open-native" class="menu-item hidden" title="O .dat é lido da mesma pasta do .cfg">Abrir… <span class="kbd">Ctrl+O</span></button>
+          <button type="button" id="open-native" class="menu-item hidden" title=".cfg (o .dat é lido da mesma pasta), .cff ou .zip – também dá para arrastar arquivos e pastas para a janela">Abrir… <span class="kbd">Ctrl+O</span></button>
           <div id="recent-block" class="hidden">
             <div class="menu-label">Recentes</div>
             <div id="recent-list" class="menu-list"></div>
@@ -65,10 +65,13 @@
         <button type="button" class="btn menu-btn">Exibir <span class="caret">▾</span></button>
         <div class="menu-pop">
           <div class="menu-label">Faixas</div>
-          <label class="menu-item"><input type="radio" name="layout" value="stacked" checked /> Uma faixa por canal</label>
-          <label class="menu-item"><input type="radio" name="layout" value="overlay" /> Analógicos sobrepostos</label>
           <label class="menu-item"><input type="radio" name="density" value="compact" checked /> Faixas compactas</label>
           <label class="menu-item"><input type="radio" name="density" value="normal" /> Faixas altas</label>
+          <div class="menu-sep"></div>
+          <div class="menu-label">Valor no cursor (C1/C2)</div>
+          <label class="menu-item" title="Raiz da média dos quadrados em 1 ciclo nominal terminando no cursor (inclui harmônicos e DC)"><input type="radio" name="valuemode" value="true_rms" checked /> RMS verdadeiro</label>
+          <label class="menu-item" title="Módulo RMS do fasor da fundamental (mínimos quadrados, 1 ciclo)"><input type="radio" name="valuemode" value="fund" /> RMS fundamental</label>
+          <label class="menu-item" title="Valor da amostra mais próxima do cursor"><input type="radio" name="valuemode" value="inst" /> Instantâneo</label>
           <div class="menu-sep"></div>
           <div class="menu-label">Ao abrir um registro, mostrar</div>
           <label class="menu-item"><input type="radio" name="onopen" value="all" checked /> Todos os canais</label>
@@ -209,7 +212,7 @@
           <label>Ocorrência <input name="occurrence" class="an-input" maxlength="200" placeholder="nº / equipamento" /></label>
           <label>Analista <input name="analyst" class="an-input" maxlength="120" /></label>
         </div>
-        <label>Comentários / análise <textarea name="comments" class="an-input rp-text" rows="4" maxlength="20000" placeholder="Descrição da sequência, comportamento da proteção… (linha em branco separa parágrafos)"></textarea></label>
+        <label>Parecer técnico do analista – comentários <textarea name="comments" class="an-input rp-text" rows="4" maxlength="20000" placeholder="Descrição da sequência, comportamento da proteção… (linha em branco separa parágrafos)"></textarea></label>
         <label>Conclusão <textarea name="conclusion" class="an-input rp-text" rows="2" maxlength="20000" placeholder="Ex.: atuação correta e seletiva."></textarea></label>
         <fieldset class="rp-sections">
           <legend>Incluir</legend>

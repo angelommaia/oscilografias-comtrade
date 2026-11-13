@@ -179,12 +179,24 @@ class PhasorDiagram(Analysis):
             extras["diffs"] = diffs
             spec = getattr(ctx.meta, "merge", None)
             if spec:
-                modes = {r.get("mode_used") for r in spec.get("records", []) if r.get("id") != spec.get("reference")}
+                per_ms = f"{360 * ctx.f0 / 1000:.1f}° por milissegundo"
+                recs = spec.get("records", [])
+                modes = {r.get("mode_used") for r in recs if r.get("id") != spec.get("reference")}
+                unlocked = [r["label"] for r in recs
+                            if (r.get("time_quality") or {}).get("locked") is False]
                 if modes - {"absolute"}:
                     notes.append(
                         "Os terminais foram alinhados por trigger/início da perturbação, não por GPS: a diferença "
-                        f"angular entre eles tem incerteza de {360 * ctx.f0 / 1000:.1f}° por milissegundo de erro "
+                        f"angular entre eles tem incerteza de {per_ms} de erro "
                         "no alinhamento. Compare módulos e formas com segurança; ângulos, com cautela.")
+                elif spec.get("forced"):
+                    notes.append(
+                        "Alinhado por GPS mesmo com horários incompatíveis (opção “juntar mesmo assim”): a diferença "
+                        f"angular entre terminais não é confiável ({per_ms} de erro).")
+                elif unlocked:
+                    notes.append(
+                        f"Alinhado por GPS, mas o .cfg indica relógio não sincronizado em {', '.join(unlocked)}: "
+                        f"a diferença angular tem incerteza de {per_ms} de erro do relógio.")
             else:
                 notes.append("Os dois conjuntos são do mesmo registro.")
 

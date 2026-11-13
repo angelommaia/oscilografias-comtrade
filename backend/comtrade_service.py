@@ -16,8 +16,11 @@ import comtrade
 import numpy as np
 
 from comtrade_reader import read_record
-from provenance import SourceFile, SourceRef
+from provenance import SourceFile, SourceRef, sha256_file
+import archive
+import timequality
 from analysis import AnalysisContext, AnalysisRequest, RecordData, get_analysis
+from analysis import cursor_values
 from analysis.dsp import list_estimators
 from analysis.context import plot_step
 from analysis.groups import apply_rotation_checks, check_rotation, detect_three_phase_groups, make_group
@@ -61,6 +64,7 @@ class RecordMeta:
     digital_channels: list[ChannelInfo] = field(default_factory=list)
     source_name: str = ""  # nome do arquivo .cfg (ou descrição do registro combinado)
     merge: dict[str, Any] | None = None  # especificação, quando é um registro combinado
+    time_quality: dict[str, Any] | None = None  # fuso/qualidade do relógio (COMTRADE 2013), ver timequality.py
 
 
 class ComtradeStore:
@@ -103,6 +107,7 @@ class ComtradeStore:
 
         meta = self._build_meta(record_id, rec)
         meta.source_name = source_name or cfg_path.name
+        meta.time_quality = timequality.from_cfg(getattr(rec, "cfg", None), meta.revision)
         analog = [self._to_primary(analog_raw[i], info) for i, info in enumerate(meta.analog_channels)]
         data = RecordData(
             meta=meta,
@@ -159,6 +164,18 @@ class ComtradeStore:
         blocos para um diretório temporário, sem passar inteiro pela RAM).
         O diretório é apagado em seguida: o hash do .dat vem calculado da gravação."""
         return self.load_from_path(cfg_file, source_name, dat_sha256=dat_sha256, keep_dat_path=False)
+
+    def load_candidate(self, cand: "archive.Candidate", workdir: Path, max_bytes: int | None = None) -> RecordMeta:
+        """Carrega um candidato de archive.collect() (.cfg/.dat, .cff, membro de .zip).
+        Arquivos temporários: o hash do .dat é calculado já (eles serão apagados)."""
+        cfg, temporary = archive.materialize(cand, workdir, max_bytes)
+        try:
+            dat = self._find_dat_file(cfg)
+            sha = sha256_file(dat) if temporary and dat is not None else None
+            return self.load_from_path(cfg, cand.source_name, dat_sha256=sha, keep_dat_path=not temporary)
+        finally:
+            if cand.kind == "cff":
+                archive.remove_tree(cfg.parent)
 
     @staticmethod
     def _find_dat_file(cfg_path: Path) -> Path | None:
@@ -270,28 +287,55 @@ class ComtradeStore:
             "channels": channels,
         }
 
-    def get_value_at_time(self, record_id: str, channel_indices: list[int], time_s: float) -> dict[str, Any]:
+    def get_value_at_time(
+        self,
+        record_id: str,
+        channel_indices: list[int],
+        time_s: float | None = None,
+        *,
+        times: list[float] | None = None,
+        mode: str = "inst",
+    ) -> dict[str, Any]:
+        """Valor dos canais na amostra mais próxima de cada instante.
+
+        ``mode``: "inst" (instantâneo), "true_rms" (RMS verdadeiro, 1 ciclo
+        nominal causal) ou "fund" (|fasor RMS| da fundamental). Digitais
+        devolvem sempre o estado. Só lê as amostras da janela de cada ponto.
+        """
+        if mode not in cursor_values.MODES:
+            raise ValueError(f"Modo de valor desconhecido: {mode}")
         data = self._get(record_id)
         meta = data.meta
-        sample_idx = int(np.clip(np.searchsorted(data.time, time_s), 0, len(data.time) - 1))
-        if sample_idx > 0 and abs(data.time[sample_idx - 1] - time_s) < abs(data.time[sample_idx] - time_s):
-            sample_idx -= 1
-        actual_time = float(data.time[sample_idx])
-        channels: list[dict[str, Any]] = []
-
-        for idx in channel_indices:
-            info, pos = self._locate(meta, idx)
-            if info is None:
-                continue
-            if info.kind == "analog":
-                value = float(data.analog[pos][sample_idx])
-                value = value if np.isfinite(value) else None
-            else:
-                value = float(data.digital[pos][sample_idx])
-            channels.append(
-                {"index": idx, "value": value, "time_s": actual_time, "unit": info.unit, "kind": info.kind}
-            )
-        return {"time_s": actual_time, "channels": channels}
+        pts = list(times or []) or ([time_s] if time_s is not None else [])
+        if not pts:
+            raise ValueError("Informe o instante.")
+        if len(pts) > 16:
+            raise ValueError("No máximo 16 instantes por consulta.")
+        fs = float(meta.sample_rate_hz or 0)
+        if fs <= 0 and len(data.time) > 1:
+            fs = 1.0 / float(np.median(np.diff(data.time[: min(len(data.time), 1000)])))
+        f0 = float(meta.frequency_hz or 60.0)
+        located = [(idx, *self._locate(meta, idx)) for idx in channel_indices]
+        points: list[dict[str, Any]] = []
+        for t in pts:
+            sample_idx = int(np.clip(np.searchsorted(data.time, t), 0, len(data.time) - 1))
+            if sample_idx > 0 and abs(data.time[sample_idx - 1] - t) < abs(data.time[sample_idx] - t):
+                sample_idx -= 1
+            actual_time = float(data.time[sample_idx])
+            channels: list[dict[str, Any]] = []
+            for idx, info, pos in located:
+                if info is None:
+                    continue
+                if info.kind == "analog":
+                    value = cursor_values.value_at(data.analog[pos], sample_idx, fs, f0, mode)
+                else:
+                    value = float(data.digital[pos][sample_idx])
+                channels.append(
+                    {"index": idx, "value": value, "time_s": actual_time, "unit": info.unit, "kind": info.kind}
+                )
+            points.append({"time_s": actual_time, "sample": sample_idx, "channels": channels})
+        first = points[0]
+        return {"mode": mode, "time_s": first["time_s"], "channels": first["channels"], "points": points}
 
     # ------------------------------------------------------------ grupos trifásicos
     def get_phasor_config(self, record_id: str) -> dict[str, Any]:

@@ -30,6 +30,8 @@ if IS_DESKTOP and len(DESKTOP_TOKEN) < 16:
 # a menos que MAX_UPLOAD_BYTES seja definido (o servidor precisa ter RAM ≈ 2× o .dat).
 _DEFAULT_UPLOAD = 50 * 1024 * 1024 if IS_PRODUCTION else 2 * 1024 * 1024 * 1024
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", _DEFAULT_UPLOAD))
+# Total descompactado de um .zip (proteção contra "bombas" de compressão).
+MAX_EXTRACT_BYTES = int(os.environ.get("MAX_EXTRACT_BYTES", 4 * MAX_UPLOAD_BYTES))
 
 _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "").strip()
 if _allowed_origins:
