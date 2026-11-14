@@ -277,7 +277,8 @@ def _walk(root: Path, depth: int = 0) -> Iterable[Path]:
 def _pair(files: Iterable[Path], base: Path | None, container: str, temporary: bool) -> list[Candidate]:
     by_dir: dict[Path, dict[str, dict[str, Path]]] = {}
     for f in files:
-        by_dir.setdefault(f.parent, {}).setdefault(f.stem.lower(), {})[f.suffix.lower()] = f
+        # o primeiro visto vale (os arquivos escolhidos vêm antes dos achados ao lado)
+        by_dir.setdefault(f.parent, {}).setdefault(f.stem.lower(), {}).setdefault(f.suffix.lower(), f)
     out: list[Candidate] = []
     for folder in sorted(by_dir, key=lambda p: str(p).lower()):
         for stem in sorted(by_dir[folder]):
@@ -334,18 +335,23 @@ def collect(inputs: list[Path], workdir: Path, max_extract: int,
     # arquivos soltos: .dat pode vir sem o .cfg na lista, mas ao lado dele no disco
     extra = []
     stems = {(f.parent, f.stem.lower()) for f in loose}
+    # Para no primeiro nome que existir: em disco que não diferencia maiúsculas
+    # (macOS, Windows) "A.cfg" e "A.CFG" são o mesmo arquivo, e seguir
+    # procurando acrescentaria o mesmo arquivo com outra grafia.
     for f in loose:
         if f.suffix.lower() == ".dat":
             for ext in (".cfg", ".CFG", ".Cfg"):
                 cfg = f.with_suffix(ext)
-                if cfg.is_file() and (cfg.parent, cfg.stem.lower()) in stems and cfg not in loose:
-                    extra.append(cfg)
+                if cfg.is_file():
+                    if (cfg.parent, cfg.stem.lower()) in stems and cfg not in loose and cfg not in extra:
+                        extra.append(cfg)
                     break
         elif f.suffix.lower() == ".cfg":
             for ext in (".dat", ".DAT", ".Dat"):
                 dat = f.with_suffix(ext)
-                if dat.is_file() and dat not in loose:
-                    extra.append(dat)
+                if dat.is_file():
+                    if dat not in loose and dat not in extra:
+                        extra.append(dat)
                     break
     temp_loose = any(_is_within(f, workdir) for f in loose)
     cands += _pair(loose + extra, loose_base, "", temporary=temp_loose)

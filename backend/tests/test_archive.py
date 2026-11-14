@@ -239,3 +239,25 @@ def test_endpoint_dropped_folder_keeps_subfolders(tmp_path):
     loaded = main.load_staged(main.LoadStagedRequest(staging=ch["staging"], keys=[r["key"] for r in recs]))
     assert [r["total_samples"] for r in loaded["records"]] == [N, N]
     main.drop_staged(ch["staging"])
+
+
+def test_case_insensitive_disk(tmp_path, monkeypatch):
+    """macOS/Windows: "A.CFG" existe quando "A.cfg" existe. O nome escolhido
+    pelo usuário é mantido e o par não é duplicado."""
+    real_is_file = Path.is_file
+
+    def is_file_ci(self):
+        if real_is_file(self):
+            return True
+        try:
+            return any(c.name.lower() == self.name.lower() and real_is_file(c) for c in self.parent.iterdir())
+        except OSError:
+            return False
+
+    monkeypatch.setattr(Path, "is_file", is_file_ci)
+    cfg = write_pair(tmp_path / "d", "A")
+    for chosen in ([cfg.with_suffix(".dat"), cfg], [cfg.with_suffix(".dat")], [cfg]):
+        cands, notes = archive.collect(chosen, tmp_path / "w", 10**8)
+        assert [c.display for c in cands] == ["A.cfg"], chosen
+        assert not notes
+
