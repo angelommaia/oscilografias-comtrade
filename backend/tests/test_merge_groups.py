@@ -167,3 +167,18 @@ def test_phasor_two_terminals(tmp_path):
     assert diffs["Va′ − Va"]["ratio"] == pytest.approx(1, abs=1e-3)
     assert diffs["Va′ − Va"]["dang"] == pytest.approx(0, abs=0.1)
     assert res["notes"] == []  # alinhado por horário (GPS)
+
+
+def test_rotation_prefers_balanced_instant():
+    """Pré-falta equilibrada e falta com a fase A 5× maior (equilíbrio de 0,2,
+    o mesmo produto equilíbrio × amplitude): a rotação vem da pré-falta."""
+    from analysis.groups import check_rotation
+
+    fs, n = 1920.0, 1920
+    t = np.arange(n) / fs
+    amp = np.where(t >= 0.3, 5.0, 1.0)
+    sig = {0: amp * np.cos(2 * np.pi * F0 * t), 1: np.cos(2 * np.pi * F0 * t - 2 * np.pi / 3),
+           2: np.cos(2 * np.pi * F0 * t + 2 * np.pi / 3)}
+    rot = check_rotation({"a": 0, "b": 1, "c": 2}, lambda i, i0, i1: sig[i][i0:i1], n, fs, F0)
+    assert rot["rotation"] == "ABC" and rot["ratio"] < 0.01
+

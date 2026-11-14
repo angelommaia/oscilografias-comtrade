@@ -244,7 +244,10 @@ def check_rotation(
         x1 = abs(pa + _A * pb + _A**2 * pc) / 3
         x2 = abs(pa + _A**2 * pb + _A * pc) / 3
         balance = mags.min() / mags.max()
-        score = balance * mags.max()
+        # o equilíbrio pesa mais que a amplitude: um instante de falta com uma
+        # fase 5× maior (balance 0,2) empatava com a pré-falta em balance·máx e
+        # o desempate ficava por conta de arredondamento (falhou com numpy 2.5)
+        score = balance**2 * mags.max()
         if best is None or score > best[0]:
             best = (score, x1, x2)
     if best is None:
